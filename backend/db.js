@@ -1,11 +1,16 @@
+require('dotenv').config(); 
+
 const { Sequelize } = require('sequelize');
 
-// 'veritabani_adi', 'kullanici_adi', 'sifre'
-const sequelize = new Sequelize('odev_portali', 'postgres', '300518', {
-  host: 'localhost',
-  dialect: 'postgres',
-  logging: false, 
-});
+const sequelize = new Sequelize(
+  process.env.DB_NAME, 
+  process.env.DB_USER, 
+  process.env.DB_PASSWORD,  
+  {
+    host: process.env.DB_HOST,
+    dialect: 'postgres'
+  }
+);
 
 const connectDB = async () => {
   try {

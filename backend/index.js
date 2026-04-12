@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { connectDB, sequelize } = require('./db');
-const { User, Criterion, Submission, Grade, AllowedStudent, Settings, Course } = require('./models');
+const { User, Criterion, Submission, Grade, AllowedStudent, Settings, Course, verifyPassword, needsPasswordRehash } = require('./models');
 const { Op } = require('sequelize'); 
 
 const app = express();
@@ -98,14 +98,12 @@ app.post('/api/auth/register', async (req, res) => {
   const { ogrenci_no, ad_soyad, sifre, secilenDersler } = req.body;
 
   try {
-    // 1. Öğrenci hocanın yüklediği listede var mı?
     const allowed = await AllowedStudent.findOne({ where: { ogrenci_no } });
 
     if (!allowed) {
       return res.status(403).json({ error: "Öğrenci numaranız sistemde tanımlı değil. Lütfen hocanızla iletişime geçin." });
     }
 
-    // 2. Seçtiği dersler, hocanın tanımladığı dersler arasında mı?
     const hocaDersleri = allowed.dersler.split(',');
     const yetkisizDers = secilenDersler.find(d => !hocaDersleri.includes(d));
 
@@ -113,11 +111,11 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(403).json({ error: `${yetkisizDers} dersini almaya yetkiniz görünmüyor.` });
     }
 
-    // 3. Her şey tamamsa User tablosuna kaydet
+  
     const newUser = await User.create({
       ogrenci_no,
       ad_soyad,
-      sifre, // Hashleme yapmayı unutma!
+      sifre,
       rol: 'ogrenci'
     });
 
@@ -132,26 +130,27 @@ app.post('/api/auth/login', async (req, res) => {
   const { ogrenci_no, sifre } = req.body;
 
   try {
-    // WHERE kısmında ogrenci_no ismini tam olarak kullanıyoruz
-    const user = await User.findOne({ 
-      where: { 
-        ogrenci_no: ogrenci_no, // Burası önemli! 
-        sifre: sifre 
-      } 
+    const user = await User.findOne({
+      where: {
+        ogrenci_no
+      }
     });
 
-    if (!user) {
+    if (!user || !(await verifyPassword(sifre, user.sifre))) {
       return res.status(401).json({ error: "Hatalı numara veya şifre!" });
     }
 
-    // Dersleri al
+    if (needsPasswordRehash(user.sifre)) {
+      user.sifre = sifre;
+      await user.save();
+    }
+
     let dersListesi = [];
     if (user.rol === 'ogrenci') {
       const allowed = await AllowedStudent.findOne({ where: { ogrenci_no: ogrenci_no } });
       console.log(`🔐 Login: ${ogrenci_no} öğrenci kaydı:`, allowed);
       
       if (allowed && allowed.dersler) {
-        // Dersler virgülle ayrılmış, boşlukları temizle
         dersListesi = allowed.dersler.split(',').map(d => d.trim()).filter(d => d.length > 0);
         console.log(`📚 Dersleri parse edildı:`, dersListesi);
       } else {
@@ -194,14 +193,9 @@ app.post('/api/admin/upload-students', async (req, res) => {
       return res.status(403).json({ error: 'Bu ders icin yetkiniz yok.' });
     }
 
-    // 0 ve 1. indeksler başlık ve kurum bilgisi olduğu için onları atlıyoruz
-    // Veri 2. indeksten itibaren başlıyor
     const gercekOgrenciler = students.slice(2); 
 
     for (const s of gercekOgrenciler) {
-      // Senin gönderdiğin veriye göre:
-      // __EMPTY -> Öğrenci No
-      // __EMPTY_1 -> Adı Soyadı
       const ogrenci_no = s["__EMPTY"];
       const adSoyad = s["__EMPTY_1"] ? s["__EMPTY_1"].trim() : "";
 
@@ -257,18 +251,15 @@ app.post('/api/submissions', async (req, res) => {
   const { userId, video_url, ders_kodu, proje_aciklamasi } = req.body;
 
   try {
-    // Daha önce bu ders için video yüklemiş mi?
     const existing = await Submission.findOne({ where: { UserId: userId, ders_kodu } });
     if (existing) {
       return res.status(400).json({ error: "Bu ders için zaten bir video yüklediniz. Tekrar yükleyemezsiniz." });
     }
 
-    // Validation
     if (!userId || !video_url || !ders_kodu) {
       return res.status(400).json({ error: "UserId, video_url ve ders_kodu gereklidir." });
     }
 
-    // Yükleme işlemine devam...
     await Submission.create({ 
       UserId: userId, 
       video_url, 
@@ -301,7 +292,6 @@ app.get('/api/assign-video/:userId/:dersKodu', async (req, res) => {
 
     console.log(`⏭️ Önceden puanlanmış: ${gradedIds.length} video`);
 
-    // Şartları oluştur: Aynı derste, kendisinden farklı öğrenciye ait, daha önce puanlanmamış
     const whereCondition = {
       ders_kodu: dersKodu,
       UserId: { [Op.ne]: parseInt(userId) }
@@ -311,14 +301,12 @@ app.get('/api/assign-video/:userId/:dersKodu', async (req, res) => {
       whereCondition.id = { [Op.notIn]: gradedIds };
     }
 
-    // Tüm uygun videoları kontrol et (debug için)
     const allEligible = await Submission.findAll({
       where: whereCondition,
       attributes: ['id', 'UserId', 'ders_kodu']
     });
     console.log(`📹 Uygun submission sayısı: ${allEligible.length}`);
 
-    // Rastgele birini seç
     const submission = await Submission.findOne({
       where: whereCondition,
       include: [{ model: User, attributes: ['ad_soyad', 'id'] }],
@@ -338,7 +326,6 @@ app.get('/api/assign-video/:userId/:dersKodu', async (req, res) => {
   }
 });
 
-//Başkalarını puanlayabilmek için önce kendi projenizi yüklemelisiniz kontrolü
 app.get('/api/can-evaluate/:userId/:dersKodu', async (req, res) => {
   const { userId, dersKodu } = req.params;
 
@@ -386,7 +373,6 @@ app.get('/api/admin/submissions/:dersKodu', adminKontrol, async (req, res) => {
       ],
       group: ['Submission.id', 'User.id'],
       subQuery: false,
-      // raw: true'yu kaldırdık çünkü iç içe objeleri (User.ad_soyad) bozuyor
     });
     res.json(submissions);
   } catch (error) {
@@ -421,7 +407,6 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
 
     if (submission.Grades) {
       submission.Grades.forEach(grade => {
-        // Hocanın verdiği puanlar (rol = hoca ve puan_veren_id != submission.UserId)
         if (grade.PuanVeren?.rol === 'hoca') {
           hocaPuanlari.push({
             id: grade.id,
@@ -430,9 +415,7 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
             max_puan: grade.Criterion?.max_puan
           });
         } 
-        // Öğrencinin verdiği puanlar (puan_veren_id = bir diğer öğrenci ID'si)
         else if (grade.puan_veren_id !== submission.UserId) {
-          // Akran tarafından verilen puanlar
           akranPuanlari.push({
             id: grade.id,
             puan: grade.puan,
@@ -440,7 +423,6 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
             veren: grade.PuanVeren?.ad_soyad
           });
         }
-        // Öğrencinin başkalarına verdiği puanlar (puan_veren_id = submission.UserId)
         else if (grade.puan_veren_id === submission.UserId) {
           ogrenciVerdigiPuanlar.push({
             id: grade.id,
@@ -457,7 +439,7 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
       video_url: submission.video_url,
       proje_aciklamasi: submission.proje_aciklamasi,
       ders_kodu: submission.ders_kodu,
-      hoca_puani: submission.hoca_puani, // Genel hoca puanı
+      hoca_puani: submission.hoca_puani,
       student: {
         id: submission.User.id,
         ad_soyad: submission.User.ad_soyad,
@@ -659,7 +641,7 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
       include: [
         { 
           model: User, 
-          as: 'RegisteredUser', // İlişkiyi ogrenci_no üzerinden kurmalısın
+          as: 'RegisteredUser',
           include: [{ model: Submission, where: { ders_kodu: dersKodu }, required: false }]
         }
       ]
@@ -691,7 +673,6 @@ app.post('/api/courses', adminKontrol, async (req, res) => {
   }
 
   try {
-    // Ders kodu zaten var mı?
     const existing = await Course.findOne({ where: { ders_kodu } });
     if (existing) {
       return res.status(400).json({ error: 'Bu ders kodu zaten mevcut.' });
@@ -725,10 +706,8 @@ app.delete('/api/courses/:dersKodu', adminKontrol, async (req, res) => {
       return res.status(404).json({ error: 'Ders bulunamadı.' });
     }
 
-    // Ders ile ilgili kriterleri de sil
     await Criterion.destroy({ where: { ders_kodu: dersKodu } });
-    
-    // Dersi sil
+
     await course.destroy();
 
     console.log(`🗑️ Ders silindi: ${dersKodu}`);
@@ -740,7 +719,6 @@ app.delete('/api/courses/:dersKodu', adminKontrol, async (req, res) => {
 });
 
 // --- HOCA YETKİLENDİRME API'LARI ---
-// Tüm hocaları getir
 app.get('/api/admin/instructors', adminKontrol, async (req, res) => {
   try {
     const instructors = await User.findAll({ where: { rol: 'hoca' }, attributes: ['id', 'ogrenci_no', 'ad_soyad', 'authorized_course'] });
@@ -757,7 +735,6 @@ app.get('/api/admin/instructors', adminKontrol, async (req, res) => {
   }
 });
 
-// Yeni hoca ekle
 app.post('/api/admin/instructors', adminKontrol, async (req, res) => {
   const { ogrenci_no, ad_soyad, sifre } = req.body;
   const authorizedCourses = parseCourseList(req.body.authorized_courses || req.body.authorized_course);
@@ -798,7 +775,6 @@ app.post('/api/admin/instructors', adminKontrol, async (req, res) => {
   }
 });
 
-// Hoca sil
 app.delete('/api/admin/instructors/:id', adminKontrol, async (req, res) => {
   const { id } = req.params;
 
@@ -844,7 +820,6 @@ app.get('/api/settings/video_limit', adminKontrol, async (req, res) => {
   }
 });
 
-// Ayarları güncelleme (Hoca Paneli için)
 app.post('/api/settings/update-limit', adminKontrol, async (req, res) => {
   const parsedLimit = Number(req.body?.limit);
   const dersKodu = String(req.body?.dersKodu || '').trim();
