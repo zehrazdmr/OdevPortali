@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api } from '../services/api';
@@ -8,42 +8,36 @@ const AdminPanel = () => {
   const user = JSON.parse(localStorage.getItem('user'));
   const [selectedCourse, setSelectedCourse] = useState(localStorage.getItem('selectedCourse') || '');
   
-  // --- STATE'LER ---
+
   const [allStudents, setAllStudents] = useState([]);
   const [filterStatus, setFilterStatus] = useState('all'); 
   const [kriterAdi, setKriterAdi] = useState('');
   const [maxPuan, setMaxPuan] = useState(100);
   const [criteria, setCriteria] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
   const [uploadCourse, setUploadCourse] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
 
-  // Rapor & Hoca Puanı & Sınır State'leri
   const [selectedStudentReport, setSelectedStudentReport] = useState(null);
-  const [submissionDetail, setSubmissionDetail] = useState(null); // Detaylı submission bilgisi
+  const [submissionDetail, setSubmissionDetail] = useState(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [hocaNotu, setHocaNotu] = useState("");
-  const [hocaKriterPuanlari, setHocaKriterPuanlari] = useState({}); // Kriterlere verilen puanlar
-  const [evaluationLimit, setEvaluationLimit] = useState(''); // Varsayılan puanlama sınırı
+  const [hocaKriterPuanlari, setHocaKriterPuanlari] = useState({});
+  const [evaluationLimit, setEvaluationLimit] = useState('');
 
-  // Ders Yönetimi State'leri
   const [courses, setCourses] = useState([]);
   const [isAddCourseModalOpen, setIsAddCourseModalOpen] = useState(false);
   const [dersKodu, setDersKodu] = useState('');
   const [dersAdi, setDersAdi] = useState('');
   const [aciklama, setAciklama] = useState('');
 
-  // Yetkili Hoca Yönetimi
   const [instructors, setInstructors] = useState([]);
   const [hocaOgrNo, setHocaOgrNo] = useState('');
   const [hocaAdSoyad, setHocaAdSoyad] = useState('');
   const [hocaSifre, setHocaSifre] = useState('');
   const [hocaAuthorizedCourse, setHocaAuthorizedCourse] = useState([]);
-  const authHeaders = user?.id ? { 'x-user-id': String(user.id) } : {};
-  const accessibleCourseCodes = user?.rol === 'hoca' ? (user.dersler || []) : courses.map(course => course.ders_kodu);
-  const accessibleCourses = courses.filter(course => accessibleCourseCodes.includes(course.ders_kodu));
+  const authHeaders = useMemo(() => (user?.id ? { 'x-user-id': String(user.id) } : {}), [user?.id]);
+  const accessibleCourseCodes = useMemo(() => (user?.rol === 'hoca' ? (user.dersler || []) : courses.map(course => course.ders_kodu)), [user?.rol, user?.dersler, courses]);
+  const accessibleCourses = useMemo(() => courses.filter(course => accessibleCourseCodes.includes(course.ders_kodu)), [courses, accessibleCourseCodes]);
 
-  // 1. VERİ ÇEKME
   const fetchData = useCallback(async () => {
     try {
       const [coursesRes, instructorsRes] = await Promise.all([
@@ -55,22 +49,15 @@ const AdminPanel = () => {
       if (instructorsRes.ok) setInstructors(instructorsRes.data);
 
       if (!selectedCourse) {
-        // Seçili ders yoksa, diğer üst bilgi kartları boş bırakılır
         return;
       }
 
-      const [criteriaRes, submissionsRes, studentsRes] = await Promise.all([
+      const [criteriaRes, studentsRes] = await Promise.all([
         api.criteria.listByCourse(selectedCourse),
-        api.admin.listSubmissions(selectedCourse, authHeaders),
         api.admin.listAllStudentsStatus(selectedCourse, authHeaders)
       ]);
 
       if (criteriaRes.ok) setCriteria(criteriaRes.data);
-      
-      if (submissionsRes.ok) {
-        const subData = submissionsRes.data;
-        setSubmissions(Array.isArray(subData) ? subData : []);
-      }
 
       if (studentsRes.ok) {
         const studentsData = studentsRes.data;
@@ -79,24 +66,26 @@ const AdminPanel = () => {
           ogrenci_no: student.ogrenci_no,
           ad_soyad: student.ad_soyad,
           isRegistered: !!student.RegisteredUser,
+          alinan_ortalama: student.alinan_ortalama,
+          verdigi_ortalama: student.verdigi_ortalama,
+          hoca_genel_puani: student.hoca_genel_puani ?? student.hoca_puani ?? null,
           Submission: student.RegisteredUser?.Submissions?.[0] || null
         })) : []);
       }
     } catch (error) {
       console.error('Veri çekme hatası:', error);
     }
-  }, [selectedCourse, user?.id]);
+  }, [selectedCourse, authHeaders]);
 
 useEffect(() => {
   const fetchLimit = async () => {
     if (!selectedCourse) return;
     try {
-      // Kendi IP adresini ve endpoint'ini kullanmayı unutma!
       const response = await api.settings.getVideoLimit(selectedCourse, authHeaders);
       const data = response.data;
       
       if (data && data.value !== undefined && data.value !== null) {
-        setEvaluationLimit(String(parseInt(data.value, 10))); // Veritabanındaki değeri state'e aktar
+        setEvaluationLimit(String(parseInt(data.value, 10)));
       }
     } catch (err) {
       console.error("Limit çekilemedi, varsayılan 3 kullanılıyor:", err);
@@ -105,7 +94,7 @@ useEffect(() => {
 
   fetchLimit();
   fetchData();
-}, [fetchData, selectedCourse, user?.id]);
+}, [fetchData, selectedCourse, authHeaders]);
 
 useEffect(() => {
   if (!accessibleCourseCodes.length) return;
@@ -115,9 +104,9 @@ useEffect(() => {
     setSelectedCourse(firstCourse);
     localStorage.setItem('selectedCourse', firstCourse);
   }
-}, [selectedCourse, user?.rol, JSON.stringify(accessibleCourseCodes)]);
+}, [selectedCourse, accessibleCourseCodes]);
 
-  // --- EXCEL YÜKLEME ---
+// --- EXCEL İLE ÖĞRENCİ LİSTESİ YÜKLEME ---
   const handleUploadClick = () => {
     if (!selectedFile || !uploadCourse) return alert("Ders ve dosya seçiniz!");
     const reader = new FileReader();
@@ -138,7 +127,7 @@ useEffect(() => {
     }
   };
 
-  // --- KRİTER EKLEME ---
+// --- KRİTER EKLEME ---
   const handleAddCriterion = async (e) => {
     e.preventDefault();
     await api.criteria.create({ kriter_adi: kriterAdi, max_puan: maxPuan, ders_kodu: selectedCourse }, authHeaders);
@@ -146,7 +135,7 @@ useEffect(() => {
     fetchData();
   };
 
-  // --- DERS EKLEME ---
+// --- DERS EKLEME ---
   const handleAddCourse = async (e) => {
     e.preventDefault();
     
@@ -174,7 +163,7 @@ useEffect(() => {
     }
   };
 
-  // --- DERSI SİL ---
+// --- DERS SİLME ---
   const handleDeleteCourse = async (ders_kodu) => {
     if (!window.confirm(`Bu dersi silmek istediğinizden emin misiniz? (${ders_kodu})`)) {
       return;
@@ -195,7 +184,7 @@ useEffect(() => {
     }
   };
 
-  // --- HOCA EKLEME ---
+// --- HOCA EKLEME ---
   const handleAddInstructor = async (e) => {
     e.preventDefault();
 
@@ -246,7 +235,7 @@ useEffect(() => {
     }
   };
 
-  // --- HOCA PUANI KAYDET ---
+// --- ÖĞRENCİ RAPORU AÇMA ---
   const handleOpenStudentReport = async (student) => {
     if (!student.Submission) {
       alert("Öğrenci henüz video yüklememiş.");
@@ -254,18 +243,23 @@ useEffect(() => {
     }
 
     setSelectedStudentReport(student);
-    setHocaNotu(student.Submission.hoca_puani || "");
     setHocaKriterPuanlari({});
     setSubmissionDetail(null);
 
-    // Detaylı submission verilerini çek
     try {
       const res = await api.admin.getSubmissionDetail(student.Submission.id, authHeaders);
 
       if (res.ok) {
         const data = res.data;
         setSubmissionDetail(data);
-        console.log("📊 Submission Detay:", data);
+
+        if (data.hocaPuanlari?.length > 0) {
+          const loaded = {};
+          data.hocaPuanlari.forEach((puan) => {
+            loaded[puan.criterionId ?? puan.CriterionId ?? puan.id] = puan.puan;
+          });
+          setHocaKriterPuanlari(loaded);
+        }
       }
     } catch (err) {
       console.error("Detay çekme hatası:", err);
@@ -274,16 +268,7 @@ useEffect(() => {
     setIsReportModalOpen(true);
   };
 
-  const handleHocaPuanKaydet = async (subId) => {
-    const res = await api.admin.gradeSubmission({ submissionId: subId, puan: hocaNotu }, authHeaders);
-    if (res.ok) {
-      alert("Puan kaydedildi!");
-      setIsReportModalOpen(false);
-      fetchData();
-    }
-  };
-
-  // --- KRİTER PUANLARI KAYDET ---
+// --- KRİTER PUANLARINI KAYDETME ---
   const handleKriterPuanlariKaydet = async (subId) => {
     if (Object.keys(hocaKriterPuanlari).length === 0) {
       alert("Lütfen en az bir kritere puan verin!");
@@ -319,32 +304,60 @@ useEffect(() => {
     }
   };
 
+  // --- GENEL HOCA PUANI HESAPLAMA ---
+  const getGeneralTeacherScore = (detail) => {
+    if (!detail) return null;
+
+    if (detail.hoca_genel_puani !== undefined && detail.hoca_genel_puani !== null) {
+      return detail.hoca_genel_puani;
+    }
+
+    if (detail.hoca_puani !== undefined && detail.hoca_puani !== null) {
+      return detail.hoca_puani;
+    }
+
+    if (detail.hocaPuanlari?.length > 0) {
+      const totals = detail.hocaPuanlari.reduce((acc, puan) => {
+        const score = Number(puan.puan);
+        const maxScore = Number(puan.max_puan);
+
+        if (!Number.isFinite(score) || !Number.isFinite(maxScore) || maxScore <= 0) {
+          return acc;
+        }
+
+        acc.obtained += score;
+        acc.maximum += maxScore;
+        return acc;
+      }, { obtained: 0, maximum: 0 });
+
+      return totals.maximum ? (totals.obtained / totals.maximum) * 100 : null;
+    }
+
+    return null;
+  };
+
+  // --- YOUTUBE URL'İNİ EMBED URL'İNE DÖNÜŞTÜRME ---
 const getYouTubeEmbedUrl = (url) => {
   if (!url) return null;
 
   let videoId = null;
 
   try {
-    // Standard URL: youtube.com/watch?v=ID
     if (url.includes('youtube.com/watch')) {
       const urlObj = new URL(url);
       videoId = urlObj.searchParams.get('v');
     } 
-    // Short URL: youtu.be/ID
     else if (url.includes('youtu.be/')) {
       videoId = url.split('youtu.be/')[1]?.split('?')[0];
     }
-    // Embed URL: youtube.com/embed/ID
     else if (url.includes('youtube.com/embed/')) {
       videoId = url.split('embed/')[1]?.split('?')[0];
     }
-    // Shorts URL: youtube.com/shorts/ID
     else if (url.includes('youtube.com/shorts/')) {
       videoId = url.split('shorts/')[1]?.split('?')[0];
     }
 
     if (videoId) {
-      // YouTube kuralları gereği köken (origin) ve güvenlik parametreleri eklenebilir
       return `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
     }
   } catch (err) {
@@ -353,6 +366,8 @@ const getYouTubeEmbedUrl = (url) => {
 
   return null;
 };
+
+// --- DEĞERLENDİRME LİMİTİNİ GÜNCELLEME ---
 const handleLimitUpdate = async () => {
   const parsedLimit = Number(evaluationLimit);
 
@@ -367,122 +382,91 @@ const handleLimitUpdate = async () => {
     if (response.ok) {
       const data = response.data;
       setEvaluationLimit(String(parsedLimit));
-      alert("✅ " + data.message); // Backend'den gelen başarı mesajı
+      alert("✅ " + data.message);
     } else {
       alert("❌ Hata: " + response.error);
     }
   } catch (err) {
     console.error("Güncelleme hatası:", err);
-    alert("📡 Sunucuya bağlanılamadı. Backend terminalini kontrol et!");
+    alert("Sunucuya bağlanılamadı. Backend terminalini kontrol et!");
   }
 };
 
-
-
-  // --- DETAYLI EXCEL RAPORU OLUŞTURMA ---
+// --- ÖĞRENCİ RAPORUNU EXCEL OLARAK İNDİRME ---
   const exportToExcel = (student) => {
+    const genelHocaPuani = getGeneralTeacherScore(submissionDetail);
     const data = [
       ["ÖĞRENCİ PERFORMANS DETAYLI RAPORU"],
       ["Ders:", selectedCourse.toUpperCase()],
       ["Öğrenci:", student.ad_soyad],
       ["Numara:", student.ogrenci_no],
       ["Rapor Tarihi:", new Date().toLocaleDateString('tr-TR')],
-      [""],
+      [""]
     ];
 
-    // HOCANIN GENEL PUANI
-    data.push(["👨‍🏫 HOCANIN GENEL PUANI"]);
-    data.push(["Puan:", submissionDetail?.hoca_puani || "Girilmedi"]);
+    data.push(["GENEL HOCA PUANI"]);
+    data.push(["Puan:", genelHocaPuani ?? "Girilmedi"]);
     data.push([""]);
 
-    // HOCANIN VERDİĞİ KRİTER PUANLARI
-    if (submissionDetail?.hocaPuanlari && submissionDetail.hocaPuanlari.length > 0) {
-      data.push(["👨‍🏫 HOCANIN VERDİĞİ KRİTER PUANLARI"]);
-      submissionDetail.hocaPuanlari.forEach(puan => {
+    data.push(["HOCANIN VERDİĞİ KRİTER PUANLARI"]);
+    if (submissionDetail?.hocaPuanlari?.length > 0) {
+      submissionDetail.hocaPuanlari.forEach((puan) => {
         data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
       });
-      const hocaOrtalama = submissionDetail.hocaPuanlari.reduce((sum, p) => sum + p.puan, 0) / submissionDetail.hocaPuanlari.length;
-      data.push(["Hoca Kriter Puanları Ortalaması:", hocaOrtalama.toFixed(2)]);
+      data.push(["Hoca Kriter Ortalaması:", formatAverage(submissionDetail?.istatistikler?.hocaGenelPuani)]);
     } else {
-      data.push(["👨‍🏫 HOCANIN VERDİĞİ KRİTER PUANLARI", "Henüz puanlandırılmamış"]);
+      data.push(["HOCANIN VERDİ?İ KRİTER PUANLARI", "Henüz puanlandırılmamış"]);
     }
-    
+
+    data.push([""]);
+    data.push(["HOCADAN ALDIĞI PUANLAR"]);
+    if (submissionDetail?.alinanHocaPuanlari?.length > 0) {
+      submissionDetail.alinanHocaPuanlari.forEach((puan) => {
+        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
+      });
+      data.push(["Hocadan Aldığı Ortalama:", formatAverage(submissionDetail?.istatistikler?.alinanHocaOrtalamasi)]);
+    } else {
+      data.push(["HOCADAN ALDI?I PUANLAR", "Henüz yok"]);
+    }
+
+    data.push([""]);
+    data.push(["AKRANLARDAN ALDI?I PUANLAR"]);
+    if (submissionDetail?.alinanAkranPuanlari?.length > 0) {
+      submissionDetail.alinanAkranPuanlari.forEach((puan) => {
+        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
+      });
+      data.push(["Akranlardan Aldığı Ortalama:", formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)]);
+    } else {
+      data.push(["AKRANLARDAN ALDI?I PUANLAR", "Henüz yok"]);
+    }
+
+    data.push(["Genel Alınan Ortalama:", formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama)]);
     data.push([""]);
 
-    // AKRAN DEĞERLENDİRMESİ (ALDIKLARI PUANLAR)
-    if (submissionDetail?.akranPuanlari && submissionDetail.akranPuanlari.length > 0) {
-      data.push(["👥 AKRAN DEĞERLENDİRMESİ (Aldığı Puanlar)"]);
-      
-      // Kriterlere göre grupla
-      const kriterGruplari = {};
-      submissionDetail.akranPuanlari.forEach(puan => {
-        if (!kriterGruplari[puan.kriter_adi]) {
-          kriterGruplari[puan.kriter_adi] = [];
-        }
-        kriterGruplari[puan.kriter_adi].push(puan.puan);
+    data.push(["Ö?RENCİNİN VERDİ?İ PUANLAR"]);
+    if (submissionDetail?.ogrenciVerdigiPuanlar?.length > 0) {
+      submissionDetail.ogrenciVerdigiPuanlar.forEach((puan) => {
+        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
       });
-
-      // Grup başına özet
-      let toplamPuan = 0;
-      let toplamSayı = 0;
-      Object.entries(kriterGruplari).forEach(([kriter, puanlar]) => {
-        const ortalama = puanlar.reduce((a, b) => a + b, 0) / puanlar.length;
-        data.push([kriter, `Ortalaması: ${ortalama.toFixed(2)}`, `(${puanlar.length} değerlendirme)`]);
-        toplamPuan += puanlar.reduce((a, b) => a + b, 0);
-        toplamSayı += puanlar.length;
-      });
-
-      const genelOrtalama = toplamPuan / toplamSayı;
-      data.push(["Genel Akran Ortalaması:", genelOrtalama.toFixed(2)]);
+      data.push(["Öğrencinin Verdiği Ortalama:", formatAverage(submissionDetail?.istatistikler?.verdigiOrtalama)]);
     } else {
-      data.push(["👥 AKRAN DEĞERLENDİRMESİ", "Henüz değerlendirilmemiş"]);
+      data.push(["Ö?RENCİNİN VERDİ?İ PUANLAR", "Henüz başkasını puanlamamış"]);
     }
-    
+
     data.push([""]);
-
-    // ÖĞRENCININ VERDİĞİ PUANLAR
-    if (submissionDetail?.ogrenciVerdigiPuanlar && submissionDetail.ogrenciVerdigiPuanlar.length > 0) {
-      data.push(["⭐ ÖĞRENCININ BAŞKALARINA VERDİĞİ PUANLAR"]);
-      
-      const kriterGruplari = {};
-      submissionDetail.ogrenciVerdigiPuanlar.forEach(puan => {
-        if (!kriterGruplari[puan.kriter_adi]) {
-          kriterGruplari[puan.kriter_adi] = [];
-        }
-        kriterGruplari[puan.kriter_adi].push(puan.puan);
-      });
-
-      let toplamPuan = 0;
-      let toplamSayı = 0;
-      Object.entries(kriterGruplari).forEach(([kriter, puanlar]) => {
-        const ortalama = puanlar.reduce((a, b) => a + b, 0) / puanlar.length;
-        data.push([kriter, `Ortalaması: ${ortalama.toFixed(2)}`, `(${puanlar.length} değerlendirme)`]);
-        toplamPuan += puanlar.reduce((a, b) => a + b, 0);
-        toplamSayı += puanlar.length;
-      });
-
-      const ogrenciVerdigiOrtalama = toplamPuan / toplamSayı;
-      data.push(["Öğrencinin Verdiği Puanlar Ortalaması:", ogrenciVerdigiOrtalama.toFixed(2)]);
-    } else {
-      data.push(["⭐ ÖĞRENCININ BAŞKALARINA VERDİĞİ PUANLAR", "Henüz başkasını puanlamamış"]);
-    }
-    
-    data.push([""]);
-
-    // ÖZET BİLGİLER
-    data.push(["📊 ÖZET BİLGİLER"]);
+    data.push(["ÖZET BİLGİLER"]);
     data.push(["Proje Açıklaması:", submissionDetail?.proje_aciklamasi || "Yok"]);
     data.push(["Video URL:", submissionDetail?.video_url || "Yok"]);
 
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws['!cols'] = [{ wch: 35 }, { wch: 20 }, { wch: 20 }];
-    
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Detaylı Rapor");
+    XLSX.utils.book_append_sheet(wb, ws, "Detayli Rapor");
     XLSX.writeFile(wb, `${student.ogrenci_no}_Detayli_Rapor_${new Date().getTime()}.xlsx`);
   };
 
-  // --- KAYDOLMAYAN ÖĞRENCİLERİ EXCEL'E AKTAR ---
+
   const exportUnregisteredStudentsToExcel = () => {
     const unregisteredStudents = allStudents.filter(s => !s.isRegistered);
     
@@ -492,7 +476,7 @@ const handleLimitUpdate = async () => {
     }
 
     const data = [
-      ["KAYDOLMAYAN ÖĞRENCİ LİSTESİ"],
+      ["KAYDOLMAYAN Ö?RENCİ LİSTESİ"],
       ["Ders:", selectedCourse.toUpperCase()],
       ["Tarih:", new Date().toLocaleDateString('tr-TR')],
       ["Toplam:", unregisteredStudents.length],
@@ -520,15 +504,16 @@ const handleLimitUpdate = async () => {
 
   const formatAverage = (value) => Number(value || 0).toFixed(2);
 
+
+  // --- STİL OBJEKTLERİ ---
   return (
     <div style={{ padding: '30px', backgroundColor: '#f4f7f6', minHeight: '100vh', fontFamily: 'Segoe UI' }}>
       
           
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', backgroundColor: '#fff', padding: '15px', borderRadius: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <h2 style={{ margin: 0 }}>🛡️ Hoca Paneli</h2>
+          <h2 style={{ margin: 0 }}>Hoca Paneli</h2>
           
-          {/* Ders Seçim Dropdown - Hızlı Geçiş */}
           <select 
             value={selectedCourse} 
             onChange={(e) => {
@@ -555,7 +540,6 @@ const handleLimitUpdate = async () => {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2.5fr', gap: '20px' }}>
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* AYARLAR KARTI */}
           <div style={cardStyle}>
             <h4>⚙️ Puanlama Sınırı</h4>
             <input type="number" min="1" value={evaluationLimit} onChange={(e) => setEvaluationLimit(e.target.value)} style={inputStyle} />
@@ -563,7 +547,7 @@ const handleLimitUpdate = async () => {
           </div>
 
           <div style={cardStyle}>
-            <h4>📊 Öğrenci Listesi Yükle</h4>
+            <h4> Öğrenci Listesi Yükle</h4>
             <select value={uploadCourse} onChange={(e) => setUploadCourse(e.target.value)} style={inputStyle}>
               <option value="">--- Ders Seçin ---</option>
               {accessibleCourses.map(course => (
@@ -577,7 +561,7 @@ const handleLimitUpdate = async () => {
           </div>
 
           <div style={cardStyle}>
-            <h4>🛠️ Yeni Kriter Ekle</h4>
+            <h4> ️ Yeni Kriter Ekle</h4>
             <form onSubmit={handleAddCriterion}>
               <input type="text" placeholder="Kriter Adı" value={kriterAdi} onChange={(e) => setKriterAdi(e.target.value)} style={inputStyle} required />
               <input type="number" placeholder="Max Puan" value={maxPuan} onChange={(e) => setMaxPuan(e.target.value)} style={inputStyle} required />
@@ -587,7 +571,7 @@ const handleLimitUpdate = async () => {
         </div>
 
         <div style={cardStyle}>
-          <h3>👥 Tüm Öğrenci Takip Listesi</h3>
+          <h3>  Tüm Öğrenci Takip Listesi</h3>
           <div style={{marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <div>
               <button onClick={() => setFilterStatus('all')} style={filterBtnStyle(filterStatus === 'all')}>Hepsi</button>
@@ -595,7 +579,7 @@ const handleLimitUpdate = async () => {
               <button onClick={() => setFilterStatus('no_video')} style={filterBtnStyle(filterStatus === 'no_video')}>Video Yüklemeyenler</button>
             </div>
             {filterStatus === 'not_registered' && (
-              <button onClick={exportUnregisteredStudentsToExcel} style={btnStyle('#27ae60')}>📥 Listeyi İndir</button>
+              <button onClick={exportUnregisteredStudentsToExcel} style={btnStyle('#27ae60')}>  Listeyi İndir</button>
             )}
           </div>
           
@@ -605,7 +589,9 @@ const handleLimitUpdate = async () => {
                 <th style={{padding:'10px'}}>Öğrenci No</th>
                 <th style={{padding:'10px'}}>Ad Soyad </th>
                 <th style={{padding:'10px'}}>Durum</th>
-                <th style={{padding:'10px'}}>Hoca Puanı</th>
+                <th style={{padding:'10px'}}>Aldığı Puan Ort.</th>
+                <th style={{padding:'10px'}}>Verdiği Puan Ort.</th>
+                <th style={{padding:'10px'}}>Genel Hoca Puanı</th>
               </tr>
             </thead>
             <tbody>
@@ -623,7 +609,9 @@ const handleLimitUpdate = async () => {
                      !s.Submission ? <span style={{color:'orange'}}>⚠️ Video Yok</span> : 
                      <span style={{color:'green'}}>✅ Tamam</span>}
                   </td>
-                  <td style={{padding:'10px', fontWeight:'bold'}}>{s.Submission?.hoca_puani || "---"}</td>
+                  <td style={{padding:'10px'}}>{s.alinan_ortalama != null ? formatAverage(s.alinan_ortalama) : "---"}</td>
+                  <td style={{padding:'10px'}}>{s.verdigi_ortalama != null ? formatAverage(s.verdigi_ortalama) : "---"}</td>
+                  <td style={{padding:'10px', fontWeight:'bold'}}>{s.hoca_genel_puani ?? "---"}</td>
                 </tr>
               ))}
             </tbody>
@@ -633,7 +621,7 @@ const handleLimitUpdate = async () => {
 
       <div style={{ marginTop: '25px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
         <div style={cardStyle}>
-          <h4>📚 Ders Yönetimi</h4>
+          <h4>  Ders Yönetimi</h4>
           <button onClick={() => setIsAddCourseModalOpen(true)} style={btnStyle('#2ecc71', '100%', '10px')}>+ Yeni Ders Ekle</button>
           
           {courses.length > 0 ? (
@@ -660,7 +648,7 @@ const handleLimitUpdate = async () => {
         </div>
 
         <div style={cardStyle}>
-          <h4>👩‍🏫 Yetkili Hoca Ekleyin</h4>
+          <h4> ‍  Yetkili Hoca Ekleyin</h4>
           <form onSubmit={handleAddInstructor}>
             <input
               type="text"
@@ -680,7 +668,7 @@ const handleLimitUpdate = async () => {
             />
             <input
               type="password"
-              placeholder="Şifre"
+              placeholder="?ifre"
               value={hocaSifre}
               onChange={(e) => setHocaSifre(e.target.value)}
               style={{ ...inputStyle, minHeight: '120px' }}
@@ -732,14 +720,13 @@ const handleLimitUpdate = async () => {
         <div style={modalOverlayStyle}>
           <div style={{...modalContentStyle, maxWidth: '1100px', height: '90vh', overflowY: 'auto'}}>
             <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #eee', paddingBottom:'10px', marginBottom:'20px'}}>
-                <h3>📊 Öğrenci Detay Raporu</h3>
+                <h3>  Öğrenci Detay Raporu</h3>
                 <button onClick={() => setIsReportModalOpen(false)} style={{border:'none', background:'none', cursor:'pointer', fontSize:'20px'}}>✕</button>
             </div>
             
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px', marginBottom:'20px'}}>
-              {/* SOL KOLON: VİDEO */}
               <div style={{backgroundColor:'#f9f9f9', padding:'15px', borderRadius:'8px'}}>
-                <h4 style={{marginTop: 0}}>🎬 Proje Videosu</h4>
+                <h4 style={{marginTop: 0}}> Proje Videosu</h4>
                 {selectedStudentReport.Submission?.video_url && getYouTubeEmbedUrl(selectedStudentReport.Submission.video_url) ? (
                   <iframe
                     width="100%"
@@ -753,7 +740,7 @@ const handleLimitUpdate = async () => {
                   />
                 ) : (
                   <div style={{backgroundColor: '#fff', padding: '20px', textAlign: 'center', borderRadius: '8px', color: '#999'}}>
-                    📹 Video bulunamadı
+                      Video bulunamadı
                   </div>
                 )}
                 <p style={{marginTop: '10px', fontSize: '12px', color: '#666'}}>
@@ -761,49 +748,41 @@ const handleLimitUpdate = async () => {
                 </p>
               </div>
 
-              {/* SAĞ KOLON: BİLGİLER VE PUANLAMA */}
               <div>
                 <div style={{backgroundColor:'#f9f9f9', padding:'15px', borderRadius:'8px', marginBottom:'15px'}}>
                   <p><b>Öğrenci:</b> {selectedStudentReport.ad_soyad}</p>
                   <p><b>No:</b> {selectedStudentReport.ogrenci_no}</p>
-                  <p><b>Aldigi Ortalama Puan:</b> {formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama || selectedStudentReport.Submission?.ortalama_puan)}</p>
+                  <p><b>Aldigi Ortalama Puan:</b> {formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama)}</p>
                   <p><b>Verdigi Ortalama Puan:</b> {formatAverage(submissionDetail?.istatistikler?.verdigiOrtalama)}</p>
-                  <p><b>Akran Ortalaması:</b> {Number(selectedStudentReport.Submission?.ortalama_puan || 0).toFixed(2)}</p>
-                  <p><b>Hoca Puanı:</b> {selectedStudentReport.Submission?.hoca_puani || "Girilmedi"}</p>
+                  <p><b>Akran Ortalaması:</b> {formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)}</p>
+                  <p><b>Genel Hoca Puanı:</b> {getGeneralTeacherScore(submissionDetail) ?? "Girilmedi"}</p>
                 </div>
 
                 <div style={{backgroundColor:'#fff3cd', padding:'15px', borderRadius:'8px', marginBottom:'15px'}}>
-                  <label><b>📝 Proje Açıklaması:</b></label>
+                  <label><b>  Proje Açıklaması:</b></label>
                   <p style={{backgroundColor:'#fff', padding:'10px', borderRadius:'5px', minHeight:'80px'}}>
                     {selectedStudentReport.Submission?.proje_aciklamasi || "Açıklama girilmemiş"}
                   </p>
                 </div>
 
-                <div style={{backgroundColor:'#e8f5e9', padding:'15px', borderRadius:'8px'}}>
-                  <label><b>👨‍🏫 Genel Hoca Puanı Ver:</b></label>
-                  <input type="number" value={hocaNotu} onChange={(e) => setHocaNotu(e.target.value)} style={inputStyle} placeholder="0-100" min="0" max="100" />
-                  <button onClick={() => handleHocaPuanKaydet(selectedStudentReport.Submission.id)} style={btnStyle('#27ae60', '100%')}>Puanı Kaydet</button>
-                </div>
-
-                <button onClick={() => exportToExcel(selectedStudentReport)} style={{...btnStyle('#2c3e50'), marginTop:'15px', width:'100%'}}>📥 Excel Raporu Al</button>
+                <button onClick={() => exportToExcel(selectedStudentReport)} style={{...btnStyle('#2c3e50'), marginTop:'15px', width:'100%'}}>  Excel Raporu Al</button>
               </div>
             </div>
 
-            {/* KRİTERLERE PUAN VERME BÖLÜMÜ */}
             {submissionDetail && (
               <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px', marginBottom:'20px'}}>
                 <div style={{backgroundColor:'#f8fbff', padding:'15px', borderRadius:'8px', border:'1px solid #d6eaff'}}>
-                  <h4 style={{marginTop:0}}>Aldigi Puanlar</h4>
+                  <h4 style={{marginTop:0}}>Öğrencilerden Aldığı Puanlar</h4>
+                  <p><b>Öğrenci Ortalaması:</b> {formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)}</p>
                   <p><b>Genel Ortalama:</b> {formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama)}</p>
-                  <p><b>Akran Ortalamasi:</b> {formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)}</p>
-                  <div style={{maxHeight:'220px', overflowY:'auto', marginTop:'10px'}}>
-                    {submissionDetail.alinanTumPuanlar?.length > 0 ? submissionDetail.alinanTumPuanlar.map(puan => (
-                      <div key={`alinan-${puan.id}`} style={{padding:'10px', backgroundColor:'#fff', borderRadius:'6px', marginBottom:'8px', border:'1px solid #eef4fb'}}>
+                  <div style={{maxHeight:'130px', overflowY:'auto', marginTop:'10px', padding:'10px', backgroundColor:'#fff', borderRadius:'6px', border:'1px solid #eef4fb'}}>
+                    {submissionDetail.alinanAkranPuanlari?.length > 0 ? submissionDetail.alinanAkranPuanlari.map(puan => (
+                      <div key={`alinan-akran-${puan.id}`} style={{padding:'8px', backgroundColor:'#fff', borderRadius:'6px', marginBottom:'8px', border:'1px solid #eef4fb'}}>
                         <div style={{fontWeight:'bold'}}>{puan.kriter_adi || 'Kriter'}</div>
                         <div>{puan.puan} / {puan.max_puan || '-'}</div>
-                        <div style={{fontSize:'12px', color:'#666'}}>Veren: {puan.veren || '-'} ({puan.verenRol === 'hoca' ? 'Hoca' : 'Ogrenci'})</div>
+                        <div style={{fontSize:'12px', color:'#666'}}>Veren: {puan.veren || '-'} ({puan.verenRol === 'hoca' ? 'Hoca' : 'Öğrenci'})</div>
                       </div>
-                    )) : <p style={{color:'#7f8c8d'}}>Henuz puan almamis.</p>}
+                    )) : <p style={{color:'#7f8c8d', margin:0}}>Akran puanı yok.</p>}
                   </div>
                 </div>
 
@@ -852,7 +831,7 @@ const handleLimitUpdate = async () => {
                   onClick={() => handleKriterPuanlariKaydet(selectedStudentReport.Submission.id)} 
                   style={{...btnStyle('#ff6b6b'), marginTop: '15px', width: '100%'}}
                 >
-                  💾 Kriter Puanlarını Kaydet
+                    Kriter Puanlarını Kaydet
                 </button>
               </div>
             )}
@@ -860,12 +839,11 @@ const handleLimitUpdate = async () => {
         </div>
       )}
 
-      {/* DERS EKLEME MODAL */}
       {isAddCourseModalOpen && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0 }}>📚 Yeni Ders Ekle</h3>
+              <h3 style={{ margin: 0 }}>  Yeni Ders Ekle</h3>
               <button 
                 onClick={() => {
                   setIsAddCourseModalOpen(false);

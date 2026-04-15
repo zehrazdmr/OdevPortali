@@ -9,7 +9,7 @@ const CourseSelection = () => {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Tüm Dersler Listesi Fetch Et
+
   useEffect(() => {
     const fetchCourses = async () => {
       try {
@@ -42,7 +42,6 @@ const CourseSelection = () => {
     navigate('/dashboard');
   };
 
-  // Eğer hiç ders yoksa hata ekranı göster
   if (!aldigiDersler || aldigiDersler.length === 0) {
     return (
       <div style={containerStyle}>
@@ -69,7 +68,6 @@ const CourseSelection = () => {
             const colors = ['#007bff', '#9c27b0', '#27ae60', '#e74c3c', '#f39c12', '#16a085'];
             const color = colors[index % colors.length];
             
-            // Kullanıcı bu dersi aldı mı?
             if (aldigiDersler.includes(course.ders_kodu)) {
               return (
                 <button 

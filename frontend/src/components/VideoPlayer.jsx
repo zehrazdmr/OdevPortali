@@ -1,6 +1,7 @@
 import React from 'react';
+
 const VideoPlayer = ({ url }) => {
-  // YouTube ID'sini ayıklayan basit bir fonksiyon
+
   const getEmbedUrl = (url) => {
     const videoId = url.split('v=')[1]?.split('&')[0];
     return `https://www.youtube.com/embed/${videoId}`;

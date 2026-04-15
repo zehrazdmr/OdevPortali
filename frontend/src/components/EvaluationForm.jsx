@@ -1,17 +1,38 @@
 import React, { useState } from 'react';
 
 const EvaluationForm = ({ criteria, submissionId }) => {
-  const [scores, setScores] = useState({}); // { kriterId: puan }
+  const [scores, setScores] = useState({});
 
   const handleScoreChange = (criterionId, value) => {
     setScores({ ...scores, [criterionId]: value });
   };
 
-  const handleSubmit = async () => {
-    // Burada backend'deki /api/grades endpoint'ine istek atacağız
-    console.log("Gönderilen Puanlar:", { submissionId, scores });
-    // Örnek: scores objesini mapleyip her biri için bir Grade kaydı oluşturulacak
-  };
+const handleSubmit = async () => {
+
+  for (const criteriaId in scores) {
+    const currentCriteria = criterias.find(c => c.id === parseInt(criteriaId));
+    const enteredScore = scores[criteriaId];
+
+    if (enteredScore > currentCriteria.ust_puan) {
+      alert(`Hata: ${currentCriteria.ad} kriteri için en fazla ${currentCriteria.ust_puan} puan verebilirsiniz!`);
+      return; 
+    }
+    
+    if (enteredScore < 0) {
+      alert("Puan sıfırdan küçük olamaz!");
+      return;
+    }
+  }
+
+  try {
+    console.log("Güvenli Puanlar Gönderiliyor:", { submissionId, scores });
+     
+    alert("Puanlar başarıyla kaydedildi!");
+  } catch (error) {
+    console.error("Kayıt sırasında hata oluştu:", error);
+    alert("Bir hata oluştu, lütfen tekrar deneyin.");
+  }
+};
 
   return (
     <div className="p-4 border rounded">

@@ -6,30 +6,31 @@ const SmartPlayer = ({ videoUrl, onWatchComplete }) => {
   const playerRef = useRef(null);
   const lastTime = useRef(0);
 
+  //Youtube linkinden video ID'sini çıkaran fonksiyon
 const getYouTubeId = (url) => {
   if (!url) return null;
-  // Her türlü YouTube link varyasyonunu kapsayan en güçlü Regex:
+  
   const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
   const match = url.match(regExp);
   return (match && match[7].length === 11) ? match[7] : null;
 };
-  console.log("Gelen Video URL:", videoUrl); // Buraya bakacağız
+  console.log("Gelen Video URL:", videoUrl);
 
 
   const videoId = getYouTubeId(videoUrl);
-  // --- DEĞİŞİKLİK BURADA BİTTİ ---
+
 
 
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden && playerRef.current) {
-        playerRef.current.pauseVideo(); // Sekme değişince durdur
+        playerRef.current.pauseVideo(); 
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
-    // Eğer videoId bulunamazsa (link hatalıysa) kullanıcıya uyarı verelim
+    
   if (!videoId) {
     return <p style={{ color: 'red' }}>⚠️ Geçersiz veya eksik YouTube linki!</p>;
   }
@@ -38,22 +39,21 @@ const getYouTubeId = (url) => {
     const player = event.target;
     
     const interval = setInterval(async () => {
-      if (player.getPlayerState() !== 1) return; // Sadece oynarken kontrol et
+      if (player.getPlayerState() !== 1) return; 
 
       const currentTime = await player.getCurrentTime();
       const duration = await player.getDuration();
 
-      // İleri sarma engeli
       if (currentTime > lastTime.current + 2.5) {
         player.seekTo(lastTime.current);
       } else {
         lastTime.current = currentTime;
       }
 
-      // %90 İzleme kontrolü
+  
       if (currentTime / duration > 0.9) {
         setCanSubmit(true);
-        onWatchComplete(true); // Puanlama formuna "Kilidi aç" sinyali gönder
+        onWatchComplete(true); 
         clearInterval(interval);
       }
     }, 1000);

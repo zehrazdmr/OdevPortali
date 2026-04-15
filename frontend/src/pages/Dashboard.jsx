@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom'; // useNavigate eklendi
+import { useNavigate } from 'react-router-dom'; 
 import { api } from '../services/api';
 
 
@@ -8,12 +8,12 @@ const Dashboard = () => {
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
   const [videoUrl, setVideoUrl] = useState('');
   const [aciklama, setAciklama] = useState('');
-  const navigate = useNavigate(); // Navigate hatasını çözer
-  const [isModalOpen, setModalOpen] = useState(false); // setModalOpen hatasını çözer
+  const navigate = useNavigate(); 
+  const [isModalOpen, setModalOpen] = useState(false); 
 
 
   useEffect(() => {
-    // Giriş yapan kullanıcıyı hafızadan çek
+
     const savedUser = JSON.parse(localStorage.getItem('user'));
     setUser(savedUser);
   }, []);
@@ -24,7 +24,6 @@ const handleVideoSubmit = async (e) => {
   const storedUser = JSON.parse(localStorage.getItem('user'));
   const selectedCourse = localStorage.getItem('selectedCourse');
   
-  // Güvenlik Kontrolü
   if (!storedUser || !storedUser.id) {
     alert("Oturum bilgisi bulunamadı, lütfen tekrar giriş yapın.");
     return;
@@ -35,9 +34,9 @@ const handleVideoSubmit = async (e) => {
     return;
   }
 
-  // BACKEND İLE TAM UYUMLU PAYLOAD
+  
   const payload = {
-    userId: storedUser.id, // Backend index.js'de 'userId' (küçük u) olarak bekliyoruz
+    userId: storedUser.id, 
     video_url: videoUrl,
     proje_aciklamasi: aciklama,
     ders_kodu: selectedCourse
@@ -66,7 +65,7 @@ const handleVideoSubmit = async (e) => {
   return (
   <div style={{ padding: '30px', fontFamily: 'Segoe UI, sans-serif', textAlign: 'center' }}>
     <div style={{ padding: '30px', fontFamily: 'Segoe UI, sans-serif', position: 'relative' }}></div>
-    {/* ÜST BAR: Kullanıcı Bilgisi ve Çıkış */}
+    
     <div style={{ 
       display: 'flex', 
       justifyContent: 'space-between', 
@@ -81,8 +80,8 @@ const handleVideoSubmit = async (e) => {
       
       <button 
         onClick={() => {
-          localStorage.clear(); // Tüm oturum verilerini sil
-          window.location.href = '/login'; // Giriş sayfasına postala
+          localStorage.clear(); 
+          window.location.href = '/login'; 
         }}
         style={logoutButtonStyle}
       >
@@ -96,7 +95,7 @@ const handleVideoSubmit = async (e) => {
 
     <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', flexWrap: 'wrap' }}>
       
-      {/* KART 1: ÖDEV YÜKLE */}
+     
       <div 
         onClick={() => setModalOpen(true)}
         style={cardStyle('#007bff')}
@@ -106,7 +105,7 @@ const handleVideoSubmit = async (e) => {
         <p>Proje videonu ve açıklamanı buradan yükleyebilirsin.</p>
       </div>
 
-      {/* KART 2: PUANLAMA YAP */}
+  
       <div 
         onClick={() => navigate('/evaluate')}
         style={cardStyle('#ffc107', 'black')}
@@ -118,13 +117,12 @@ const handleVideoSubmit = async (e) => {
 
     </div>
 
-    {/* MODAL (Video Yükleme Formu - Sadece Butona Basınca Açılsın) */}
+    
     {isModalOpen && (
   <div style={modalOverlayStyle}>
     <div style={modalContentStyle}>
       <h2 style={{ marginBottom: '20px' }}>🚀 Proje Videosu Yükle</h2>
-      
-      {/* 1. YOUTUBE URL INPUT */}
+   
       <input 
         type="text" 
         placeholder="YouTube Video Linki (örn: https://youtu.be/...)" 
@@ -133,7 +131,7 @@ const handleVideoSubmit = async (e) => {
         style={inputStyle}
       />
 
-      {/* 2. PROJE AÇIKLAMASI */}
+     
       <textarea 
         placeholder="Projeniz hakkında kısa bir bilgi verin..." 
         value={aciklama}
@@ -141,7 +139,7 @@ const handleVideoSubmit = async (e) => {
         style={{ ...inputStyle, height: '100px', resize: 'none' }}
       />
 
-      {/* 3. GÖNDER BUTONU */}
+      
       <button 
         onClick={handleVideoSubmit} 
         style={submitButtonStyle}
@@ -149,7 +147,7 @@ const handleVideoSubmit = async (e) => {
         Ödevi Teslim Et
       </button>
 
-      {/* 4. KAPAT BUTONU */}
+      
       <button 
         onClick={() => setModalOpen(false)} 
         style={closeButtonStyle}
@@ -170,7 +168,7 @@ const inputStyle = {
   marginBottom: '15px',
   borderRadius: '8px',
   border: '1px solid #ddd',
-  boxSizing: 'border-box' // Taşıp kutuyu bozmaması için
+  boxSizing: 'border-box'
 };
 
 const submitButtonStyle = {
@@ -200,7 +198,7 @@ const modalOverlayStyle = {
   left: 0,
   width: '100%',
   height: '100%',
-  backgroundColor: 'rgba(0, 0, 0, 0.7)', // Arka planı karartır
+  backgroundColor: 'rgba(0, 0, 0, 0.7)',
   display: 'flex',
   justifyContent: 'center',
   alignItems: 'center',

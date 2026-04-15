@@ -17,14 +17,14 @@ const EvaluatePage = () => {
   console.log('Selected Course:', selectedCourse);
   console.log('User:', user);
 
-  // 1. Önce Video Yükleme Durumunu Kontrol Et
+ 
   useEffect(() => {
     const checkStatus = async () => {
       try {
         const { data } = await api.evaluations.checkSubmissionStatus(user.id, selectedCourse);
         setHasUploaded(data.hasUploaded);
         
-        // Eğer yüklemişse, değerlendirme verilerini getir
+
         if (data.hasUploaded) {
           loadInitialData();
         } else {
@@ -38,7 +38,7 @@ const EvaluatePage = () => {
 
     const loadInitialData = async () => {
       try {
-        // A) Video Ata (Rastgele bir video getirir)
+        
         const assignRes = await api.evaluations.assignVideo(user.id, selectedCourse);
         
         if (!assignRes.ok) {
@@ -49,7 +49,7 @@ const EvaluatePage = () => {
         }
         setSubmission(assignRes.data);
 
-        // B) Kriterleri Getir
+       
         const criteriaRes = await api.criteria.listByCourse(selectedCourse);
         const criteriaData = criteriaRes.data;
         console.log('Kriterler API yanıtı:', criteriaData);
@@ -101,11 +101,10 @@ const EvaluatePage = () => {
     }
   };
 
-  // --- RENDER MANTIĞI ---
+ 
 
   if (loading) return <div style={{padding:'50px', textAlign:'center'}}>Veriler yükleniyor...</div>;
 
-  // Video yüklememişse engelleyici uyarı ekranı
   if (hasUploaded === false) {
     return (
       <div style={warningContainerStyle}>

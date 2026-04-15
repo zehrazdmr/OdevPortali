@@ -39,6 +39,15 @@ const getEvaluationLimit = async (dersKodu) => {
   return Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_VIDEO_LIMIT;
 };
 
+const normalizeStudentNumber = (value) => String(value || '').trim();
+
+const normalizeName = (value) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const normalizeNameForCompare = (value) => normalizeName(value).toLocaleLowerCase('tr-TR');
+
 const isAdminInstructor = async (user) => {
   if (!user || user.rol !== 'hoca') return false;
   if (user.is_admin) return true;
@@ -64,6 +73,80 @@ const getUserEvaluatedSubmissionIdsForCourse = async (userId, dersKodu) => {
   });
 
   return grades.map(grade => grade.SubmissionId);
+};
+
+const pickRandomSubmissionForEvaluation = async (whereCondition) => {
+  const eligibleSubmissions = await Submission.findAll({
+    where: whereCondition,
+    attributes: ['id']
+  });
+
+  if (!eligibleSubmissions.length) {
+    return null;
+  }
+
+  const eligibleIds = eligibleSubmissions.map((submission) => submission.id);
+
+  const gradedSubmissionIds = await Grade.findAll({
+    where: {
+      SubmissionId: { [Op.in]: eligibleIds }
+    },
+    attributes: ['SubmissionId'],
+    group: ['SubmissionId'],
+    raw: true
+  });
+
+  const gradedIdSet = new Set(gradedSubmissionIds.map((grade) => grade.SubmissionId));
+  const ungradedIds = eligibleIds.filter((id) => !gradedIdSet.has(id));
+  const targetIds = ungradedIds.length > 0 ? ungradedIds : eligibleIds;
+
+  return Submission.findOne({
+    where: { id: { [Op.in]: targetIds } },
+    include: [{ model: User, attributes: ['ad_soyad', 'id'] }],
+    order: [sequelize.fn('RANDOM')]
+  });
+};
+
+const calculateGeneralTeacherScore = (teacherGrades = []) => {
+  const totals = teacherGrades.reduce((acc, grade) => {
+    const puan = Number(grade?.puan);
+    const maxPuan = Number(grade?.max_puan);
+
+    if (!Number.isFinite(puan) || !Number.isFinite(maxPuan) || maxPuan <= 0) {
+      return acc;
+    }
+
+    acc.obtained += puan;
+    acc.maximum += maxPuan;
+    return acc;
+  }, { obtained: 0, maximum: 0 });
+
+  if (!totals.maximum) {
+    return null;
+  }
+
+  return (totals.obtained / totals.maximum) * 100;
+};
+
+const calculateWeightedAverage = (grades = []) => {
+  const totals = grades.reduce((acc, grade) => {
+    const puan = Number(grade?.puan);
+    const maxPuan = Number(grade?.max_puan);
+
+    if (!Number.isFinite(puan) || !Number.isFinite(maxPuan) || maxPuan <= 0) {
+      return acc;
+    }
+
+    acc.obtained += puan;
+    acc.maximum += maxPuan;
+    return acc;
+  }, { obtained: 0, maximum: 0 });
+
+  if (!totals.maximum) {
+    return null;
+  }
+
+  return (totals.obtained / totals.maximum) * 100;
 };
 
 // --- MIDDLEWARE ---
@@ -96,12 +179,24 @@ const adminKontrol = async (req, res, next) => {
 // KAYIT OLMA
 app.post('/api/auth/register', async (req, res) => {
   const { ogrenci_no, ad_soyad, sifre, secilenDersler } = req.body;
+  const normalizedOgrenciNo = normalizeStudentNumber(ogrenci_no);
+  const normalizedAdSoyad = normalizeName(ad_soyad);
 
   try {
-    const allowed = await AllowedStudent.findOne({ where: { ogrenci_no } });
+    const allowed = await AllowedStudent.findOne({ where: { ogrenci_no: normalizedOgrenciNo } });
 
     if (!allowed) {
       return res.status(403).json({ error: "Öğrenci numaranız sistemde tanımlı değil. Lütfen hocanızla iletişime geçin." });
+    }
+
+    if (normalizeNameForCompare(allowed.ad_soyad) !== normalizeNameForCompare(normalizedAdSoyad)) {
+      return res.status(403).json({ error: "Ad soyad bilgisi okul listesindeki kayÄ±t ile eÅŸleÅŸmiyor." });
+    }
+
+    const existingUser = await User.findOne({ where: { ogrenci_no: normalizedOgrenciNo } });
+
+    if (existingUser) {
+      return res.status(409).json({ error: "Bu Ã¶ÄŸrenci numarasÄ± ile zaten kayÄ±t olunmuÅŸ." });
     }
 
     const hocaDersleri = allowed.dersler.split(',');
@@ -113,8 +208,8 @@ app.post('/api/auth/register', async (req, res) => {
 
   
     const newUser = await User.create({
-      ogrenci_no,
-      ad_soyad,
+      ogrenci_no: normalizedOgrenciNo,
+      ad_soyad: normalizedAdSoyad,
       sifre,
       rol: 'ogrenci'
     });
@@ -128,11 +223,12 @@ app.post('/api/auth/register', async (req, res) => {
 // GİRİŞ YAPMA
 app.post('/api/auth/login', async (req, res) => {
   const { ogrenci_no, sifre } = req.body;
+  const normalizedOgrenciNo = normalizeStudentNumber(ogrenci_no);
 
   try {
     const user = await User.findOne({
       where: {
-        ogrenci_no
+        ogrenci_no: normalizedOgrenciNo
       }
     });
 
@@ -147,14 +243,14 @@ app.post('/api/auth/login', async (req, res) => {
 
     let dersListesi = [];
     if (user.rol === 'ogrenci') {
-      const allowed = await AllowedStudent.findOne({ where: { ogrenci_no: ogrenci_no } });
-      console.log(`🔐 Login: ${ogrenci_no} öğrenci kaydı:`, allowed);
+      const allowed = await AllowedStudent.findOne({ where: { ogrenci_no: normalizedOgrenciNo } });
+      console.log(`🔐 Login: ${normalizedOgrenciNo} öğrenci kaydı:`, allowed);
       
       if (allowed && allowed.dersler) {
         dersListesi = allowed.dersler.split(',').map(d => d.trim()).filter(d => d.length > 0);
         console.log(`📚 Dersleri parse edildı:`, dersListesi);
       } else {
-        console.log(`⚠️ ${ogrenci_no} için AllowedStudent kaydı bulunamadı!`);
+        console.log(`⚠️ ${normalizedOgrenciNo} için AllowedStudent kaydı bulunamadı!`);
       }
     } else if (user.rol === 'hoca') {
       dersListesi = parseCourseList(user.authorized_course);
@@ -194,28 +290,58 @@ app.post('/api/admin/upload-students', async (req, res) => {
     }
 
     const gercekOgrenciler = students.slice(2); 
+    const existingStudents = await AllowedStudent.findAll();
+    const existingByNormalizedNo = new Map();
+
+    existingStudents.forEach((student) => {
+      const normalizedNo = normalizeStudentNumber(student.ogrenci_no);
+      if (!normalizedNo) return;
+
+      const sameStudents = existingByNormalizedNo.get(normalizedNo) || [];
+      sameStudents.push(student);
+      existingByNormalizedNo.set(normalizedNo, sameStudents);
+    });
 
     for (const s of gercekOgrenciler) {
-      const ogrenci_no = s["__EMPTY"];
-      const adSoyad = s["__EMPTY_1"] ? s["__EMPTY_1"].trim() : "";
+      const ogrenci_no = normalizeStudentNumber(s["__EMPTY"]);
+      const adSoyad = normalizeName(s["__EMPTY_1"]);
 
       if (!ogrenci_no || ogrenci_no === "Öğrenci No") continue;
 
-      let record = await AllowedStudent.findOne({ where: { ogrenci_no: String(ogrenci_no) } });
+      const matchingRecords = existingByNormalizedNo.get(ogrenci_no) || [];
+      let record = matchingRecords[0];
 
       if (record) {
-        let mevcutDersler = record.dersler ? record.dersler.split(',') : [];
+        let mevcutDersler = parseCourseList(record.dersler);
         if (!mevcutDersler.includes(secilenDers)) {
           mevcutDersler.push(secilenDers);
-          record.dersler = mevcutDersler.join(',');
-          await record.save();
         }
+
+        record.ogrenci_no = ogrenci_no;
+        record.ad_soyad = normalizeName(record.ad_soyad) || adSoyad;
+
+        if (matchingRecords.length > 1) {
+          for (const duplicateRecord of matchingRecords.slice(1)) {
+            mevcutDersler = [...new Set([...mevcutDersler, ...parseCourseList(duplicateRecord.dersler)])];
+
+            if (!record.ad_soyad) {
+              record.ad_soyad = normalizeName(duplicateRecord.ad_soyad);
+            }
+
+            await duplicateRecord.destroy();
+          }
+        }
+
+        record.dersler = mevcutDersler.join(',');
+        await record.save();
+        existingByNormalizedNo.set(ogrenci_no, [record]);
       } else {
-        await AllowedStudent.create({
-          ogrenci_no: String(ogrenci_no),
+        const created = await AllowedStudent.create({
+          ogrenci_no,
           ad_soyad: adSoyad,
           dersler: secilenDers
         });
+        existingByNormalizedNo.set(ogrenci_no, [created]);
       }
     }
     res.json({ message: 'Öğrenciler başarıyla listeye eklendi!' });
@@ -307,11 +433,7 @@ app.get('/api/assign-video/:userId/:dersKodu', async (req, res) => {
     });
     console.log(`📹 Uygun submission sayısı: ${allEligible.length}`);
 
-    const submission = await Submission.findOne({
-      where: whereCondition,
-      include: [{ model: User, attributes: ['ad_soyad', 'id'] }],
-      order: [sequelize.fn('RANDOM')]
-    });
+    const submission = await pickRandomSubmissionForEvaluation(whereCondition);
 
     if (!submission) {
       console.log(`❌ Hiç video bulunamadı`);
@@ -400,6 +522,10 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
         }
       ]
     });
+    if (!submission) {
+      return res.status(404).json({ error: 'Submission bulunamadı.' });
+    }
+    const criterias = await Criterion.findAll({ where: { ders_kodu: submission?.ders_kodu } });
 
     const hocaPuanlari = [];
     const akranPuanlari = [];
@@ -410,6 +536,7 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
         if (grade.PuanVeren?.rol === 'hoca') {
           hocaPuanlari.push({
             id: grade.id,
+            criterionId: grade.Criterion?.id,
             puan: grade.puan,
             kriter_adi: grade.Criterion?.kriter_adi,
             max_puan: grade.Criterion?.max_puan
@@ -418,6 +545,7 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
         else if (grade.puan_veren_id !== submission.UserId) {
           akranPuanlari.push({
             id: grade.id,
+            criterionId: grade.Criterion?.id,
             puan: grade.puan,
             kriter_adi: grade.Criterion?.kriter_adi,
             veren: grade.PuanVeren?.ad_soyad
@@ -426,6 +554,7 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
         else if (grade.puan_veren_id === submission.UserId) {
           ogrenciVerdigiPuanlar.push({
             id: grade.id,
+            criterionId: grade.Criterion?.id,
             puan: grade.puan,
             kriter_adi: grade.Criterion?.kriter_adi,
             puanlananOgrenci: 'Başka Öğrenci'
@@ -433,13 +562,16 @@ app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async
         }
       });
     }
+    const hocaGenelPuani = calculateGeneralTeacherScore(hocaPuanlari);
 
     const response = {
       id: submission.id,
       video_url: submission.video_url,
       proje_aciklamasi: submission.proje_aciklamasi,
       ders_kodu: submission.ders_kodu,
-      hoca_puani: submission.hoca_puani,
+      hoca_puani: hocaGenelPuani,
+      hoca_genel_puani: hocaGenelPuani,
+      criterias: criterias.map((criterion) => criterion.toJSON()),
       student: {
         id: submission.User.id,
         ad_soyad: submission.User.ad_soyad,
@@ -486,14 +618,19 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       return res.status(403).json({ error: 'Bu ders bilgilerine erisemezsiniz.' });
     }
 
+    const criterias = await Criterion.findAll({ where: { ders_kodu: submission.ders_kodu } });
+
     const hocaPuanlari = [];
     const akranPuanlari = [];
+    const alinanHocaPuanlari = [];
+    const alinanAkranPuanlari = [];
     const alinanTumPuanlar = [];
 
     if (submission.Grades) {
       submission.Grades.forEach((grade) => {
         const ortakKayit = {
           id: grade.id,
+          criterionId: grade.Criterion?.id,
           puan: grade.puan,
           kriter_adi: grade.Criterion?.kriter_adi,
           max_puan: grade.Criterion?.max_puan,
@@ -505,11 +642,14 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
 
         if (grade.PuanVeren?.rol === 'hoca') {
           hocaPuanlari.push(ortakKayit);
+          alinanHocaPuanlari.push(ortakKayit);
         } else {
           akranPuanlari.push(ortakKayit);
+          alinanAkranPuanlari.push(ortakKayit);
         }
       });
     }
+    const hocaGenelPuani = calculateWeightedAverage(hocaPuanlari);
 
     const verilenPuanKayitlari = await Grade.findAll({
       where: { puan_veren_id: submission.UserId },
@@ -547,7 +687,9 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       video_url: submission.video_url,
       proje_aciklamasi: submission.proje_aciklamasi,
       ders_kodu: submission.ders_kodu,
-      hoca_puani: submission.hoca_puani,
+      hoca_puani: hocaGenelPuani,
+      hoca_genel_puani: hocaGenelPuani,
+      criterias: criterias.map((criterion) => criterion.toJSON()),
       student: {
         id: submission.User.id,
         ad_soyad: submission.User.ad_soyad,
@@ -555,13 +697,17 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       },
       hocaPuanlari,
       akranPuanlari,
+      alinanHocaPuanlari,
+      alinanAkranPuanlari,
       alinanTumPuanlar,
       ogrenciVerdigiPuanlar,
       istatistikler: {
-        hocaOrtalamasi: ortalamaHesapla(hocaPuanlari),
-        alinanAkranOrtalamasi: ortalamaHesapla(akranPuanlari),
-        alinanGenelOrtalama: ortalamaHesapla(alinanTumPuanlar),
-        verdigiOrtalama: ortalamaHesapla(ogrenciVerdigiPuanlar)
+        hocaOrtalamasi: hocaGenelPuani,
+        hocaGenelPuani,
+        alinanHocaOrtalamasi: calculateWeightedAverage(alinanHocaPuanlari),
+        alinanAkranOrtalamasi: calculateWeightedAverage(alinanAkranPuanlari),
+        alinanGenelOrtalama: calculateWeightedAverage(alinanTumPuanlar),
+        verdigiOrtalama: calculateWeightedAverage(ogrenciVerdigiPuanlar)
       }
     });
   } catch (error) {
@@ -594,37 +740,81 @@ app.post('/api/grades', async (req, res) => {
       return res.status(404).json({ error: 'Submission bulunamadı.' });
     }
 
-    const existingGrade = await Grade.findOne({
+    if (!Array.isArray(scores) || scores.length === 0) {
+      return res.status(400).json({ error: 'En az bir kriter puanı gereklidir.' });
+    }
+
+    const evaluationLimit = await getEvaluationLimit(submission.ders_kodu);
+    const gradedIds = await getUserEvaluatedSubmissionIdsForCourse(userId, submission.ders_kodu);
+    const existingSubmissionGrade = await Grade.findOne({
       where: {
         SubmissionId: submissionId,
         puan_veren_id: userId
       }
     });
 
-    if (existingGrade) {
-      return res.status(400).json({ error: 'Bu videoyu zaten değerlendirdiniz.' });
-    }
-
-    const evaluationLimit = await getEvaluationLimit(submission.ders_kodu);
-    const gradedIds = await getUserEvaluatedSubmissionIdsForCourse(userId, submission.ders_kodu);
-
-    if (gradedIds.length >= evaluationLimit) {
+    if (gradedIds.length >= evaluationLimit && !existingSubmissionGrade) {
       return res.status(403).json({ error: `Bu ders için en fazla ${evaluationLimit} video değerlendirebilirsiniz.` });
     }
 
-    const gradePromises = scores.map(s => {
-      return Grade.create({
-        puan: s.puan,
-        SubmissionId: submissionId,
-        puan_veren_id: userId,
-        puanlanan_ogrenci_id: puanlananOgrenciId,
-        CriterionId: s.criterionId
-      });
+    const requestedCriterionIds = [...new Set(scores.map((score) => Number(score.criterionId)).filter(Boolean))];
+    const validCriteria = await Criterion.findAll({
+      where: {
+        id: requestedCriterionIds,
+        ders_kodu: submission.ders_kodu
+      }
     });
+
+    if (validCriteria.length !== requestedCriterionIds.length) {
+      return res.status(400).json({ error: 'Geçersiz kriter puanı gönderildi.' });
+    }
+
+    const criterionMap = new Map(validCriteria.map((criterion) => [criterion.id, criterion]));
+
+    const gradePromises = scores.map(async (score) => {
+      const criterionId = Number(score.criterionId);
+      const puan = Number(score.puan);
+      const criterion = criterionMap.get(criterionId);
+
+      if (!criterion) {
+        throw new Error('Geçersiz kriter bulundu.');
+      }
+
+      if (!Number.isFinite(puan) || !Number.isInteger(puan)) {
+        throw new Error('Puanlar tam sayı olmalıdır.');
+      }
+
+      if (puan < criterion.min_puan || puan > criterion.max_puan) {
+        throw new Error(`${criterion.kriter_adi} kriteri için geçerli aralık ${criterion.min_puan}-${criterion.max_puan}.`);
+      }
+
+      const [grade, created] = await Grade.findOrCreate({
+        where: {
+          SubmissionId: submissionId,
+          puan_veren_id: userId,
+          CriterionId: criterionId
+        },
+        defaults: {
+          puan,
+          SubmissionId: submissionId,
+          puan_veren_id: userId,
+          puanlanan_ogrenci_id: puanlananOgrenciId,
+          CriterionId: criterionId
+        }
+      });
+
+      if (!created) {
+        await grade.update({
+          puan,
+          puanlanan_ogrenci_id: puanlananOgrenciId
+        });
+      }
+    });
+
     await Promise.all(gradePromises);
     res.json({ message: 'Kaydedildi.' });
   } catch (error) {
-    res.status(500).json({ error: 'Hata.' });
+    res.status(500).json({ error: error.message || 'Hata.' });
   }
 });
 // TÜM ÖĞRENCİLERİN DURUMUNU GETİR (Admin Paneli için)
@@ -646,7 +836,122 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
         }
       ]
     });
-    res.json(students);
+
+    const submissions = students
+      .map((student) => student.RegisteredUser?.Submissions?.[0])
+      .filter(Boolean);
+
+    const submissionIds = submissions.map((submission) => submission.id);
+    const userIds = students
+      .map((student) => student.RegisteredUser?.id)
+      .filter(Boolean);
+
+    const [receivedGrades, teacherGrades, givenGrades] = await Promise.all([
+      submissionIds.length
+        ? Grade.findAll({
+            where: { SubmissionId: { [Op.in]: submissionIds } },
+            attributes: ['SubmissionId', 'puan'],
+            include: [{
+              model: Criterion,
+              attributes: ['max_puan']
+            }]
+          })
+        : [],
+      submissionIds.length
+        ? Grade.findAll({
+            where: { SubmissionId: { [Op.in]: submissionIds } },
+            attributes: ['SubmissionId', 'puan'],
+            include: [{
+              model: Criterion,
+              attributes: ['max_puan'],
+            }, {
+              model: User,
+              as: 'PuanVeren',
+              attributes: ['rol']
+            }]
+          })
+        : [],
+      userIds.length
+        ? Grade.findAll({
+            where: { puan_veren_id: { [Op.in]: userIds } },
+            attributes: ['puan_veren_id', 'puan'],
+            include: [{
+              model: Submission,
+              attributes: ['UserId'],
+              where: { ders_kodu: dersKodu }
+          }]
+        })
+        : []
+    ]);
+
+    const teacherGradeGroups = teacherGrades.reduce((acc, grade) => {
+      if (grade.PuanVeren?.rol !== 'hoca') {
+        return acc;
+      }
+
+      const key = grade.SubmissionId;
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+
+      acc[key].push({
+        puan: grade.puan,
+        max_puan: grade.Criterion?.max_puan
+      });
+      return acc;
+    }, {});
+
+    const teacherStats = Object.fromEntries(
+      Object.entries(teacherGradeGroups).map(([submissionId, grades]) => [
+        submissionId,
+        calculateGeneralTeacherScore(grades)
+      ])
+    );
+
+    const receivedStats = receivedGrades.reduce((acc, grade) => {
+      const key = grade.SubmissionId;
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push({
+        puan: grade.puan,
+        max_puan: grade.Criterion?.max_puan
+      });
+      return acc;
+    }, {});
+
+    const givenStats = givenGrades.reduce((acc, grade) => {
+      if (grade.Submission?.UserId === grade.puan_veren_id) {
+        return acc;
+      }
+
+      const key = grade.puan_veren_id;
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push({
+        puan: grade.puan,
+        max_puan: grade.Criterion?.max_puan
+      });
+      return acc;
+    }, {});
+
+    const enrichedStudents = students.map((student) => {
+      const registeredUser = student.RegisteredUser;
+      const submission = registeredUser?.Submissions?.[0];
+      const received = submission ? receivedStats[submission.id] : null;
+      const given = registeredUser ? givenStats[registeredUser.id] : null;
+
+      return {
+        ...student.toJSON(),
+        alinan_ortalama: received ? calculateWeightedAverage(received) : null,
+        verdigi_ortalama: given ? calculateWeightedAverage(given) : null,
+        hoca_puani: submission ? (teacherStats[submission.id] ?? null) : null,
+        hoca_genel_puani: submission ? (teacherStats[submission.id] ?? null) : null
+      };
+    });
+
+    res.json(enrichedStudents);
   } catch (error) {
     res.status(500).json({ error: 'Liste çekilirken hata oluştu.' });
   }

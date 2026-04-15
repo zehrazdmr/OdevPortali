@@ -61,14 +61,14 @@ const User = sequelize.define('User', {
   }
 });
 
-// 1.5. DERSLER - DİNAMİK DERS YÖNETİMİ
+// 2. DERSLER - DİNAMİK DERS YÖNETİMİ
 const Course = sequelize.define('Course', {
   ders_kodu: { type: DataTypes.STRING, unique: true, allowNull: false },
   ders_adi: { type: DataTypes.STRING, allowNull: false },
   aciklama: { type: DataTypes.TEXT }
 });
 
-// 2. ÖDEV / VİDEO
+// 3. ÖDEV / VİDEO
 const Submission = sequelize.define('Submission', {
   ders_kodu: { 
     type: DataTypes.STRING, 
@@ -93,7 +93,7 @@ const Submission = sequelize.define('Submission', {
 });
 
 
-// 3. KRİTER
+// 4. KRİTER
 const Criterion = sequelize.define('Criterion', {
   kriter_adi: { type: DataTypes.STRING, allowNull: false },
   min_puan: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -101,7 +101,7 @@ const Criterion = sequelize.define('Criterion', {
   ders_kodu: { type: DataTypes.STRING, allowNull: false }
 });
 
-//4. PUAN
+// 5. PUAN
 const Grade = sequelize.define('Grade', {
   puan: {
     type: DataTypes.INTEGER,
@@ -117,13 +117,13 @@ const Grade = sequelize.define('Grade', {
   }
   
 });
-// 5. İZİN VERİLEN ÖĞRENCİLER 
+// 6. İZİN VERİLEN ÖĞRENCİLER 
 const AllowedStudent = sequelize.define('AllowedStudent', {
   ogrenci_no: { type: DataTypes.STRING, unique: true, allowNull: false },
   ad_soyad: { type: DataTypes.STRING },
   dersler: { type: DataTypes.TEXT, defaultValue: '' } 
 });
-// 6. GENEL AYARLAR 
+// 7. GENEL AYARLAR 
 const Settings = sequelize.define('Settings', {
   key: { type: DataTypes.STRING, unique: true },
   value: { type: DataTypes.STRING }

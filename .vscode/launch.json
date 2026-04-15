@@ -1,0 +1,11 @@
+{
+    "configurations": [
+        
+        {
+            "type": "msedge",
+            "name": "http://localhost:3000/admin",
+            "request": "launch",
+            "url": "http://localhost:3000/admin"
+        }
+    ]
+}

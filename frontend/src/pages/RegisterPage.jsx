@@ -13,7 +13,7 @@ const RegisterPage = () => {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Dersler Listesini Fetch Et
+ 
   useEffect(() => {
     const fetchCourses = async () => {
       try {
@@ -34,7 +34,7 @@ const RegisterPage = () => {
     fetchCourses();
   }, []);
 
-  // Checkbox Değişim Yönetimi
+
   const handleCheckboxChange = (dersId) => {
     setFormData(prev => {
       const yeniDersler = prev.secilenDersler.includes(dersId)
@@ -53,13 +53,19 @@ const RegisterPage = () => {
     }
 
     try {
-      const response = await api.auth.register(formData);
+      const cleanedFormData = {
+        ...formData,
+        ogrenci_no: formData.ogrenci_no.trim(),
+        ad_soyad: formData.ad_soyad.replace(/\s+/g, ' ').trim()
+      };
+
+      const response = await api.auth.register(cleanedFormData);
 
       if (response.ok) {
         alert("Kayıt başarılı! Giriş yapabilirsiniz.");
         navigate('/login');
       } else {
-        // Backend'den gelen "Bu numaraya sahip öğrenci listede yok" uyarısını gösterir
+       
         alert(response.error || "Kayıt sırasında bir hata oluştu.");
       }
     } catch (error) {
