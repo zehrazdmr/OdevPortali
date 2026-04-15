@@ -1,6 +1,6 @@
 # OdevPortali
 
-Öğrencilerin proje videosu yükleyip birbirlerinin videolarını değerlendirebildiği tam yığın bir uygulama.
+Öğrencilerin proje videosu yükleyip birbirlerinin videolarını değerlendirebildiği bir uygulama.
 
 ## Özellikler
 
