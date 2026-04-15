@@ -1,70 +1,66 @@
-# Getting Started with Create React App
+# OdevPortali Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Bu proje, öğrencilerin proje videosu yükleyip başka öğrencilerin videolarını izleyerek puan verebildiği bir değerlendirme sisteminin React arayüzüdür.
 
-## Available Scripts
+## Proje İçeriği
 
-In the project directory, you can run:
+- Kullanıcı kayıt ve giriş ekranları
+- Öğrenci paneli
+- Proje videosu yükleme
+- Değerlendirme sayfası
+- Rastgele video oynatma ve puanlama
+- Hoca/admin ekranları
+- Ders, kriter ve limit yönetimi
 
-### `npm start`
+## Kurulum
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### 1. Backend
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+```bash
+cd backend
+npm install
+```
 
-### `npm test`
+`backend/.env` dosyasını kendi veritabanına göre ayarla:
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```env
+DB_HOST=localhost
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_NAME=odev_portali
+```
 
-### `npm run build`
+Backend varsayılan olarak `5000` portunda çalışır.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+Çalıştırma:
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+```bash
+node index.js
+```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### 2. Bağımlılıkları yükle
 
-### `npm run eject`
+```bash
+cd frontend
+npm install
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+### 3. API adresini ayarla
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Frontend, backend adresini `REACT_APP_API_BASE_URL` değişkeninden okur. Yerel geliştirme için örnek:
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+```powershell
+$env:REACT_APP_API_BASE_URL="http://localhost:5000/api"
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### 4. Uygulamayı başlat
 
-## Learn More
+```bash
+npm start
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Ardından uygulama genellikle `http://localhost:3000` adresinde açılır.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+## Not
 
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+Backend’in de çalışıyor olması gerekir. Frontend, backend olmadan tam olarak çalışmaz.
