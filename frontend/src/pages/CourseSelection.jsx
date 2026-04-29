@@ -2,134 +2,70 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 
-const CourseSelection = () => {
+export default function CourseSelection() {
   const navigate = useNavigate();
-  const user = JSON.parse(localStorage.getItem('user'));
+  const user = JSON.parse(localStorage.getItem('user') || 'null');
   const aldigiDersler = user?.dersler || [];
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
 
-
   useEffect(() => {
-    const fetchCourses = async () => {
-      try {
-        const response = await api.courses.list();
-    
-        if (response.ok) {
-          setCourses(response.data);
-        } else {
-          console.error('Dersler yüklenemedi');
-          setCourses([]);
-        }
-      } catch (error) {
-        console.error('Dersler çekilirken hata:', error);
-        setCourses([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchCourses();
+    if (!user) { navigate('/login'); return; }
+    api.courses.list()
+      .then(r => setCourses(r.ok ? r.data : []))
+      .catch(() => setCourses([]))
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    console.log('📚 CourseSelection - User:', user);
-    console.log('📚 CourseSelection - Dersler:', aldigiDersler);
-    console.log('📚 CourseSelection - Dersler Sayısı:', aldigiDersler.length);
-  }, []);
-
-  const handleSelect = (dersId) => {
-    localStorage.setItem('selectedCourse', dersId);
+  const handleSelect = (kod) => {
+    localStorage.setItem('selectedCourse', kod);
     navigate('/dashboard');
   };
 
-  if (!aldigiDersler || aldigiDersler.length === 0) {
+  const handleLogout = () => { localStorage.clear(); navigate('/login'); };
+
+  if (!aldigiDersler.length) {
     return (
-      <div style={containerStyle}>
-        <div style={{...cardStyle, backgroundColor: '#fff3cd', borderLeft: '5px solid #ff9800'}}>
-          <h2 style={{color: '#e65100'}}>⚠️ Ders Bulunamadı</h2>
-          <p style={{color: '#555'}}>Üzerinize tanımlı ders bulunmamaktadır.</p>
-          <p style={{color: '#888', fontSize: '14px'}}>Lütfen sisteme başarıyla kayıt olmuş olduğunuzdan emin olun. Hoca Paneli'nde Excel listesi üzerinden öğrenci eklemesi yapılmış olmalıdır.</p>
-          <button onClick={() => { localStorage.clear(); navigate('/login'); }} style={{...primaryBtn, marginTop: '15px'}}>
-            Ana Sayfaya Dön
-          </button>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="card p-8 max-w-md w-full text-center">
+          <div className="text-5xl mb-4">⚠️</div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Ders Bulunamadı</h2>
+          <p className="text-gray-500 text-sm mb-6">Üzerinize tanımlı ders bulunmamaktadır. Hoca Paneli'nden öğrenci listesi yüklenmesi gerekmektedir.</p>
+          <button onClick={handleLogout} className="btn-secondary">Ana Sayfaya Dön</button>
         </div>
       </div>
     );
   }
 
+  const myCourses = courses.filter(c => aldigiDersler.includes(c.ders_kodu));
+
   return (
-    <div style={containerStyle}>
-      <h2>📚 Devam Etmek İstediğiniz Dersi Seçin</h2>
-      <div style={{ display: 'flex', gap: '20px', marginTop: '20px', flexWrap: 'wrap', justifyContent: 'center' }}>
+    <div className="min-h-screen bg-gradient-to-br from-primary-900 to-primary-700 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg">
+        <div className="text-center mb-8">
+          <h1 className="text-2xl font-bold text-white">📚 Ders Seçin</h1>
+          <p className="text-primary-200 mt-1 text-sm">Devam etmek istediğiniz dersi seçin</p>
+        </div>
         {loading ? (
-          <p style={{ color: '#7f8c8d', marginTop: '30px' }}>Dersler yükleniyor...</p>
-        ) : courses.length > 0 ? (
-          courses.map((course, index) => {
-            const colors = ['#007bff', '#9c27b0', '#27ae60', '#e74c3c', '#f39c12', '#16a085'];
-            const color = colors[index % colors.length];
-            
-            if (aldigiDersler.includes(course.ders_kodu)) {
+          <div className="text-center text-primary-200">Yükleniyor...</div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {myCourses.map((course, i) => {
+              const colors = ['from-blue-500 to-blue-600', 'from-purple-500 to-purple-600', 'from-emerald-500 to-emerald-600', 'from-rose-500 to-rose-600', 'from-amber-500 to-amber-600'];
               return (
-                <button 
-                  key={course.ders_kodu} 
-                  onClick={() => handleSelect(course.ders_kodu)} 
-                  style={courseBtnStyle(color)}
-                >
-                  {course.ders_adi}
+                <button key={course.ders_kodu} onClick={() => handleSelect(course.ders_kodu)}
+                  className={`bg-gradient-to-br ${colors[i % colors.length]} text-white p-6 rounded-2xl shadow-lg hover:scale-105 transition-transform text-left`}>
+                  <div className="font-bold text-lg">{course.ders_adi}</div>
+                  <div className="text-white/70 text-sm mt-1">{course.ders_kodu}</div>
                 </button>
               );
-            }
-            return null;
-          })
-        ) : (
-          <p style={{ color: '#e74c3c', marginTop: '30px' }}>Ders Seçilmedi</p>
+            })}
+          </div>
         )}
+        <div className="text-center mt-8">
+          <button onClick={handleLogout} className="text-primary-200 hover:text-white text-sm transition-colors">Çıkış Yap</button>
+        </div>
       </div>
     </div>
   );
-};
-
-
-const courseBtnStyle = (color) => ({
-  width: '200px',
-  padding: '30px',
-  backgroundColor: color,
-  color: 'white',
-  borderRadius: '15px',
-  cursor: 'pointer',
-  transition: '0.3s',
-  boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
-  border: 'none',
-  fontSize: '16px',
-  fontWeight: 'bold'
-});
-
-const containerStyle = {
-  display: 'flex',
-  flexDirection: 'column',  
-  alignItems: 'center',
-  justifyContent: 'center',
-  height: '100vh',
-  backgroundColor: '#f0f2f5',
-  textAlign: 'center',
-  padding: '20px'
-};
-
-const cardStyle = {
-  padding: '30px',
-  borderRadius: '10px',
-  maxWidth: '500px'
-};
-
-const primaryBtn = {
-  padding: '10px 20px',
-  backgroundColor: '#007bff',
-  color: 'white',
-  border: 'none',
-  borderRadius: '5px',
-  cursor: 'pointer',
-  fontSize: '14px',
-  fontWeight: 'bold'
-};
-
-export default CourseSelection;
+}

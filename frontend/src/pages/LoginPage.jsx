@@ -1,73 +1,94 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../services/api';
 
-
-const LoginPage = () => {
-  const [ogrenci_no, setogrenci_no] = useState('');
+export default function LoginPage() {
+  const [ogrenci_no, setOgrenciNo] = useState('');
   const [sifre, setSifre] = useState('');
-  const [error,setError] = useState('');
-  
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-const handleLogin = async (e) => {
-  e.preventDefault();
-  const response = await api.auth.login({ ogrenci_no: ogrenci_no.trim(), sifre });
-  const data = response.data;
-
-  if (response.ok) {
-    localStorage.setItem('user', JSON.stringify(data.user));
-
-    if (data.user.rol === 'hoca') {
-  
-      navigate('/admin');
-    } else {
-   
-      const dersSayisi = data.user.dersler.length;
-
-      if (dersSayisi === 1) {
-       
-        localStorage.setItem('selectedCourse', data.user.dersler[0]);
-        navigate('/dashboard');
-      } else if (dersSayisi > 1) {
-       
-        navigate('/course-selection');
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await api.auth.login({ ogrenci_no: ogrenci_no.trim(), sifre });
+      if (res.ok) {
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+        if (res.data.user.rol === 'hoca') {
+          navigate('/admin');
+        } else {
+          const dersler = res.data.user.dersler || [];
+          if (dersler.length === 1) {
+            localStorage.setItem('selectedCourse', dersler[0]);
+            navigate('/dashboard');
+          } else if (dersler.length > 1) {
+            navigate('/course-selection');
+          } else {
+            alert('Üzerinize tanımlı ders bulunamadı!');
+          }
+        }
       } else {
-        alert("Üzerinize tanımlı ders bulunamadı!");
+        alert(res.error || 'Giriş başarısız.');
       }
+    } catch {
+      alert('Sunucuya bağlanılamadı.');
+    } finally {
+      setLoading(false);
     }
-  } else {
-    alert(response.error);
-  }
-};
+  };
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', marginTop: '100px' }}>
-      <div style={{ padding: '30px', border: '1px solid #ccc', borderRadius: '8px', width: '350px' }}>
-        <h2 style={{ textAlign: 'center' }}>Ödev Portalı</h2>
-        <form onSubmit={handleLogin}>
-          <input 
-            type="text" 
-            placeholder="Öğrenci Numarası" 
-            value={ogrenci_no} 
-            onChange={(e) => setogrenci_no(e.target.value)} 
-            style={{ width: '100%', padding: '10px', marginBottom: '10px' }}
-          />
-          <input 
-            type="password" 
-            placeholder="Şifre" 
-            value={sifre} 
-            onChange={(e) => setSifre(e.target.value)} 
-            style={{ width: '100%', padding: '10px', marginBottom: '10px' }}
-          />
-          {error && <p style={{ color: 'red', fontSize: '14px' }}>{error}</p>}
-          <button type="submit" style={{ width: '100%', padding: '10px', backgroundColor: '#007bff', color: 'white', border: 'none', cursor: 'pointer' }}>
-            Giriş Yap
-          </button>
-        </form>
+    <div className="min-h-screen bg-gradient-to-br from-primary-900 via-primary-800 to-primary-700 flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 rounded-2xl mb-4">
+            <span className="text-3xl">🎓</span>
+          </div>
+          <h1 className="text-2xl font-bold text-white">Ödev Portalı</h1>
+          <p className="text-primary-200 text-sm mt-1">Sisteme giriş yapın</p>
+        </div>
+
+        {/* Form */}
+        <div className="card p-8">
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label className="label">Öğrenci / Kullanıcı No</label>
+              <input
+                className="input-field"
+                type="text"
+                placeholder="Kullanıcı adınızı girin"
+                value={ogrenci_no}
+                onChange={e => setOgrenciNo(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="label">Şifre</label>
+              <input
+                className="input-field"
+                type="password"
+                placeholder="Şifrenizi girin"
+                value={sifre}
+                onChange={e => setSifre(e.target.value)}
+                required
+              />
+            </div>
+            <button type="submit" disabled={loading} className="btn-primary w-full py-2.5 text-base">
+              {loading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-gray-500">
+            Hesabınız yok mu?{' '}
+            <Link to="/register" className="text-primary-600 font-medium hover:underline">
+              Kayıt Ol
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );
-};
-
-export default LoginPage;
+}

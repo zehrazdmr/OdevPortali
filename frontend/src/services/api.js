@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://9b1a-193-140-142-102.ngrok-free.app/api';
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://23e8-2a00-1d36-d0f9-f500-3898-5b-d40b-ef3a.ngrok-free.app/api';
 
 const buildUrl = (endpoint, query = {}) => {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;

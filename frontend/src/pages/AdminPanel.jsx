@@ -3,928 +3,518 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api } from '../services/api';
 
-const AdminPanel = () => {
+const fmtAvg = (v) => (v != null ? Number(v).toFixed(1) : '—');
+
+export default function AdminPanel() {
   const navigate = useNavigate();
-  const user = JSON.parse(localStorage.getItem('user'));
+  const user = useMemo(() => JSON.parse(localStorage.getItem('user') || 'null'), []);
+
   const [selectedCourse, setSelectedCourse] = useState(localStorage.getItem('selectedCourse') || '');
-  
-
+  const [courses, setCourses] = useState([]);
   const [allStudents, setAllStudents] = useState([]);
-  const [filterStatus, setFilterStatus] = useState('all'); 
-  const [kriterAdi, setKriterAdi] = useState('');
-  const [maxPuan, setMaxPuan] = useState(100);
   const [criteria, setCriteria] = useState([]);
-  const [uploadCourse, setUploadCourse] = useState('');
-  const [selectedFile, setSelectedFile] = useState(null);
-
-  const [selectedStudentReport, setSelectedStudentReport] = useState(null);
-  const [submissionDetail, setSubmissionDetail] = useState(null);
-  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [hocaKriterPuanlari, setHocaKriterPuanlari] = useState({});
+  const [instructors, setInstructors] = useState([]);
+  const [filterStatus, setFilterStatus] = useState('all');
   const [evaluationLimit, setEvaluationLimit] = useState('');
 
-  const [courses, setCourses] = useState([]);
-  const [isAddCourseModalOpen, setIsAddCourseModalOpen] = useState(false);
-  const [dersKodu, setDersKodu] = useState('');
-  const [dersAdi, setDersAdi] = useState('');
-  const [aciklama, setAciklama] = useState('');
+  // Formlar
+  const [kriterAdi, setKriterAdi] = useState('');
+  const [maxPuan, setMaxPuan] = useState(100);
+  const [uploadCourse, setUploadCourse] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [courseForm, setCourseForm] = useState({ ders_kodu: '', ders_adi: '', aciklama: '' });
+  const [hocaForm, setHocaForm] = useState({ ogrenci_no: '', ad_soyad: '', sifre: '', authorized_courses: [] });
 
-  const [instructors, setInstructors] = useState([]);
-  const [hocaOgrNo, setHocaOgrNo] = useState('');
-  const [hocaAdSoyad, setHocaAdSoyad] = useState('');
-  const [hocaSifre, setHocaSifre] = useState('');
-  const [hocaAuthorizedCourse, setHocaAuthorizedCourse] = useState([]);
-  const authHeaders = useMemo(() => (user?.id ? { 'x-user-id': String(user.id) } : {}), [user?.id]);
-  const accessibleCourseCodes = useMemo(() => (user?.rol === 'hoca' ? (user.dersler || []) : courses.map(course => course.ders_kodu)), [user?.rol, user?.dersler, courses]);
-  const accessibleCourses = useMemo(() => courses.filter(course => accessibleCourseCodes.includes(course.ders_kodu)), [courses, accessibleCourseCodes]);
+  // Modallar
+  const [showCourseModal, setShowCourseModal] = useState(false);
+  const [reportModal, setReportModal] = useState(null);
+  const [submissionDetail, setSubmissionDetail] = useState(null);
+  const [hocaPuanlari, setHocaPuanlari] = useState({});
+
+  // Yükleme
+  const [saving, setSaving] = useState(false);
+
+  const authHeaders = useMemo(() => (user?.id ? { 'x-user-id': String(user.id) } : {}), [user]);
+
+  const accessibleCodes = useMemo(() => {
+    if (user?.is_admin) return courses.map(c => c.ders_kodu);
+    return user?.rol === 'hoca' ? (user.dersler || []) : [];
+  }, [user, courses]);
+
+  const accessibleCourses = useMemo(() =>
+    courses.filter(c => accessibleCodes.includes(c.ders_kodu)), [courses, accessibleCodes]);
 
   const fetchData = useCallback(async () => {
     try {
-      const [coursesRes, instructorsRes] = await Promise.all([
-        api.courses.list(),
-        api.admin.listInstructors(authHeaders)
-      ]);
-
-      if (coursesRes.ok) setCourses(coursesRes.data);
-      if (instructorsRes.ok) setInstructors(instructorsRes.data);
-
-      if (!selectedCourse) {
-        return;
-      }
-
-      const [criteriaRes, studentsRes] = await Promise.all([
+      const [cRes, iRes] = await Promise.all([api.courses.list(), api.admin.listInstructors(authHeaders)]);
+      if (cRes.ok) setCourses(cRes.data);
+      if (iRes.ok) setInstructors(iRes.data);
+      if (!selectedCourse) return;
+      const [krRes, stRes] = await Promise.all([
         api.criteria.listByCourse(selectedCourse),
-        api.admin.listAllStudentsStatus(selectedCourse, authHeaders)
+        api.admin.listAllStudentsStatus(selectedCourse, authHeaders),
       ]);
-
-      if (criteriaRes.ok) setCriteria(criteriaRes.data);
-
-      if (studentsRes.ok) {
-        const studentsData = studentsRes.data;
-        setAllStudents(Array.isArray(studentsData) ? studentsData.map(student => ({
-          id: student.id,
-          ogrenci_no: student.ogrenci_no,
-          ad_soyad: student.ad_soyad,
-          isRegistered: !!student.RegisteredUser,
-          alinan_ortalama: student.alinan_ortalama,
-          verdigi_ortalama: student.verdigi_ortalama,
-          hoca_genel_puani: student.hoca_genel_puani ?? student.hoca_puani ?? null,
-          Submission: student.RegisteredUser?.Submissions?.[0] || null
-        })) : []);
+      if (krRes.ok) setCriteria(krRes.data);
+      if (stRes.ok) {
+        setAllStudents((stRes.data || []).map(s => ({
+          id: s.id, ogrenci_no: s.ogrenci_no, ad_soyad: s.ad_soyad,
+          isRegistered: !!s.RegisteredUser,
+          alinan_ortalama: s.alinan_ortalama,
+          verdigi_ortalama: s.verdigi_ortalama,
+          hoca_genel_puani: s.hoca_genel_puani ?? null,
+          Submission: s.RegisteredUser?.Submissions?.[0] || null,
+        })));
       }
-    } catch (error) {
-      console.error('Veri çekme hatası:', error);
-    }
+    } catch (err) { console.error(err); }
   }, [selectedCourse, authHeaders]);
 
-useEffect(() => {
-  const fetchLimit = async () => {
-    if (!selectedCourse) return;
-    try {
-      const response = await api.settings.getVideoLimit(selectedCourse, authHeaders);
-      const data = response.data;
-      
-      if (data && data.value !== undefined && data.value !== null) {
-        setEvaluationLimit(String(parseInt(data.value, 10)));
-      }
-    } catch (err) {
-      console.error("Limit çekilemedi, varsayılan 3 kullanılıyor:", err);
+  useEffect(() => {
+    if (!user) { navigate('/login'); return; }
+    const fetchLimit = async () => {
+      if (!selectedCourse) return;
+      const r = await api.settings.getVideoLimit(selectedCourse, authHeaders);
+      if (r.ok && r.data?.value) setEvaluationLimit(String(parseInt(r.data.value)));
+    };
+    fetchLimit();
+    fetchData();
+  }, [fetchData, selectedCourse, user]);
+
+  useEffect(() => {
+    if (!accessibleCodes.length) return;
+    if (!selectedCourse || !accessibleCodes.includes(selectedCourse)) {
+      const first = accessibleCodes[0];
+      if (first) { setSelectedCourse(first); localStorage.setItem('selectedCourse', first); }
     }
+  }, [accessibleCodes, selectedCourse]);
+
+  // ── Ders Ekleme ────────────────────────────────────────────────────────────
+  const handleAddCourse = async (e) => {
+    e.preventDefault();
+    if (!courseForm.ders_kodu.trim() || !courseForm.ders_adi.trim()) { alert('Ders kodu ve adı gereklidir!'); return; }
+    setSaving(true);
+    try {
+      const r = await api.courses.create(courseForm, authHeaders);
+      if (r.ok) { setShowCourseModal(false); setCourseForm({ ders_kodu: '', ders_adi: '', aciklama: '' }); fetchData(); }
+      else alert(r.error);
+    } finally { setSaving(false); }
   };
 
-  fetchLimit();
-  fetchData();
-}, [fetchData, selectedCourse, authHeaders]);
+  const handleDeleteCourse = async (kod) => {
+    if (!window.confirm(`"${kod}" dersini silmek istiyor musunuz?`)) return;
+    const r = await api.courses.remove(kod, authHeaders);
+    if (r.ok) fetchData(); else alert(r.error);
+  };
 
-useEffect(() => {
-  if (!accessibleCourseCodes.length) return;
+  // ── Kriter Ekleme ─────────────────────────────────────────────────────────
+  const handleAddCriterion = async (e) => {
+    e.preventDefault();
+    await api.criteria.create({ kriter_adi: kriterAdi, max_puan: parseInt(maxPuan), ders_kodu: selectedCourse }, authHeaders);
+    setKriterAdi(''); setMaxPuan(100); fetchData();
+  };
 
-  if (!selectedCourse || !accessibleCourseCodes.includes(selectedCourse)) {
-    const firstCourse = accessibleCourseCodes[0];
-    setSelectedCourse(firstCourse);
-    localStorage.setItem('selectedCourse', firstCourse);
-  }
-}, [selectedCourse, accessibleCourseCodes]);
-
-// --- EXCEL İLE ÖĞRENCİ LİSTESİ YÜKLEME ---
-  const handleUploadClick = () => {
-    if (!selectedFile || !uploadCourse) return alert("Ders ve dosya seçiniz!");
+  // ── Öğrenci Listesi Yükleme ───────────────────────────────────────────────
+  const handleUpload = () => {
+    if (!selectedFile || !uploadCourse) { alert('Ders ve dosya seçiniz!'); return; }
     const reader = new FileReader();
     reader.onload = (evt) => {
-      const data = XLSX.utils.sheet_to_json(XLSX.read(evt.target.result, { type: 'binary' }).Sheets[XLSX.read(evt.target.result, { type: 'binary' }).SheetNames[0]]);
-      sendStudentsToBackend(data, uploadCourse);
+      const wb = XLSX.read(evt.target.result, { type: 'binary' });
+      const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      api.admin.uploadStudents({ students: data, secilenDers: uploadCourse }, authHeaders)
+        .then(r => { if (r.ok) { alert('Liste işlendi! ✅'); fetchData(); } else alert(r.error); });
       setSelectedFile(null);
-      document.getElementById('excelInput').value = "";
+      document.getElementById('excelInput').value = '';
     };
     reader.readAsBinaryString(selectedFile);
   };
 
-  const sendStudentsToBackend = async (students, dersKodu) => {
-    const res = await api.admin.uploadStudents({ students, secilenDers: dersKodu }, authHeaders);
-    if (res.ok) {
-      alert("Liste başarıyla işlendi! ✅");
-      fetchData();
-    }
-  };
-
-// --- KRİTER EKLEME ---
-  const handleAddCriterion = async (e) => {
-    e.preventDefault();
-    await api.criteria.create({ kriter_adi: kriterAdi, max_puan: maxPuan, ders_kodu: selectedCourse }, authHeaders);
-    setKriterAdi('');
-    fetchData();
-  };
-
-// --- DERS EKLEME ---
-  const handleAddCourse = async (e) => {
-    e.preventDefault();
-    
-    if (!dersKodu.trim() || !dersAdi.trim()) {
-      alert("Ders kodu ve adı gereklidir!");
-      return;
-    }
-
-    try {
-      const res = await api.courses.create({ ders_kodu: dersKodu, ders_adi: dersAdi, aciklama }, authHeaders);
-
-      if (res.ok) {
-        alert("✅ Ders başarıyla eklendi!");
-        setDersKodu('');
-        setDersAdi('');
-        setAciklama('');
-        setIsAddCourseModalOpen(false);
-        fetchData();
-      } else {
-        alert("Hata: " + res.error);
-      }
-    } catch (error) {
-      console.error("Ders ekleme hatası:", error);
-      alert("Sunucu hatası");
-    }
-  };
-
-// --- DERS SİLME ---
-  const handleDeleteCourse = async (ders_kodu) => {
-    if (!window.confirm(`Bu dersi silmek istediğinizden emin misiniz? (${ders_kodu})`)) {
-      return;
-    }
-
-    try {
-      const res = await api.courses.remove(ders_kodu, authHeaders);
-
-      if (res.ok) {
-        alert("✅ Ders silindi!");
-        fetchData();
-      } else {
-        alert("Hata: " + res.error);
-      }
-    } catch (error) {
-      console.error("Ders silme hatası:", error);
-      alert("Sunucu hatası");
-    }
-  };
-
-// --- HOCA EKLEME ---
+  // ── Hoca Ekleme ───────────────────────────────────────────────────────────
   const handleAddInstructor = async (e) => {
     e.preventDefault();
-
-    if (!hocaOgrNo.trim() || !hocaAdSoyad.trim() || !hocaSifre.trim() || hocaAuthorizedCourse.length === 0) {
-      alert("Lütfen tüm alanları doldurun ve yetkili dersi seçin.");
-      return;
+    if (!hocaForm.ogrenci_no || !hocaForm.ad_soyad || !hocaForm.sifre || !hocaForm.authorized_courses.length) {
+      alert('Tüm alanları doldurun.'); return;
     }
-
+    setSaving(true);
     try {
-      const res = await api.admin.createInstructor({
-        ogrenci_no: hocaOgrNo,
-        ad_soyad: hocaAdSoyad,
-        sifre: hocaSifre,
-        authorized_courses: hocaAuthorizedCourse
-      }, authHeaders);
-
-      if (res.ok) {
-        alert('✅ Hoca başarıyla eklendi!');
-        setHocaOgrNo('');
-        setHocaAdSoyad('');
-        setHocaSifre('');
-        setHocaAuthorizedCourse([]);
-        fetchData();
-      } else {
-        alert('Hata: ' + res.error);
-      }
-    } catch (error) {
-      console.error('Hoca ekleme hatası:', error);
-      alert('Sunucu hatası');
-    }
+      const r = await api.admin.createInstructor(hocaForm, authHeaders);
+      if (r.ok) { setHocaForm({ ogrenci_no: '', ad_soyad: '', sifre: '', authorized_courses: [] }); fetchData(); alert('✅ Hoca eklendi!'); }
+      else alert(r.error);
+    } finally { setSaving(false); }
   };
-// --- HOCA SİL ---
+
   const handleDeleteInstructor = async (id) => {
-    if (!window.confirm('Bu hocayı silmek istediğinizden emin misiniz?')) return;
-
-    try {
-      const res = await api.admin.deleteInstructor(id, authHeaders);
-
-      if (res.ok) {
-        alert('✅ Hoca silindi!');
-        fetchData();
-      } else {
-        alert('Hata: ' + res.error);
-      }
-    } catch (error) {
-      console.error('Hoca silme hatası:', error);
-      alert('Sunucu hatası');
-    }
+    if (!window.confirm('Bu hocayı silmek istiyor musunuz?')) return;
+    const r = await api.admin.deleteInstructor(id, authHeaders);
+    if (r.ok) { fetchData(); } else alert(r.error);
   };
 
-// --- ÖĞRENCİ RAPORU AÇMA ---
-  const handleOpenStudentReport = async (student) => {
-    if (!student.Submission) {
-      alert("Öğrenci henüz video yüklememiş.");
-      return;
-    }
-
-    setSelectedStudentReport(student);
-    setHocaKriterPuanlari({});
+  // ── Öğrenci Raporu ────────────────────────────────────────────────────────
+  const openReport = async (student) => {
+    if (!student.Submission) { alert('Öğrenci henüz video yüklememiş.'); return; }
+    setReportModal(student);
+    setHocaPuanlari({});
     setSubmissionDetail(null);
-
     try {
-      const res = await api.admin.getSubmissionDetail(student.Submission.id, authHeaders);
-
-      if (res.ok) {
-        const data = res.data;
-        setSubmissionDetail(data);
-
-        if (data.hocaPuanlari?.length > 0) {
-          const loaded = {};
-          data.hocaPuanlari.forEach((puan) => {
-            loaded[puan.criterionId ?? puan.CriterionId ?? puan.id] = puan.puan;
-          });
-          setHocaKriterPuanlari(loaded);
-        }
+      const r = await api.admin.getSubmissionDetail(student.Submission.id, authHeaders);
+      if (r.ok) {
+        setSubmissionDetail(r.data);
+        const loaded = {};
+        (r.data.hocaPuanlari || []).forEach(p => { loaded[p.criterionId ?? p.id] = p.puan; });
+        setHocaPuanlari(loaded);
+      } else {
+        console.error('Submission detail hatası:', r.error);
       }
     } catch (err) {
-      console.error("Detay çekme hatası:", err);
-    }
-
-    setIsReportModalOpen(true);
-  };
-
-// --- KRİTER PUANLARINI KAYDETME ---
-  const handleKriterPuanlariKaydet = async (subId) => {
-    if (Object.keys(hocaKriterPuanlari).length === 0) {
-      alert("Lütfen en az bir kritere puan verin!");
-      return;
-    }
-
-    const scores = Object.entries(hocaKriterPuanlari).map(([criterionId, puan]) => ({
-      criterionId: parseInt(criterionId),
-      puan: parseInt(puan)
-    }));
-
-    const payload = {
-      submissionId: subId,
-      userId: user.id,
-      puanlananOgrenciId: selectedStudentReport.Submission.UserId,
-      scores: scores
-    };
-
-    try {
-      const res = await api.grades.create(payload);
-
-      if (res.ok) {
-        alert("Kriter puanları kaydedildi! ✅");
-        setHocaKriterPuanlari({});
-        fetchData();
-      } else {
-        const err = res;
-        alert("Hata: " + err.error);
-      }
-    } catch (error) {
-      console.error("Puan kaydetme hatası:", error);
-      alert("Sunucu hatası");
+      console.error('Rapor yüklenemedi:', err);
     }
   };
 
-  // --- GENEL HOCA PUANI HESAPLAMA ---
-  const getGeneralTeacherScore = (detail) => {
-    if (!detail) return null;
-
-    if (detail.hoca_genel_puani !== undefined && detail.hoca_genel_puani !== null) {
-      return detail.hoca_genel_puani;
-    }
-
-    if (detail.hoca_puani !== undefined && detail.hoca_puani !== null) {
-      return detail.hoca_puani;
-    }
-
-    if (detail.hocaPuanlari?.length > 0) {
-      const totals = detail.hocaPuanlari.reduce((acc, puan) => {
-        const score = Number(puan.puan);
-        const maxScore = Number(puan.max_puan);
-
-        if (!Number.isFinite(score) || !Number.isFinite(maxScore) || maxScore <= 0) {
-          return acc;
-        }
-
-        acc.obtained += score;
-        acc.maximum += maxScore;
-        return acc;
-      }, { obtained: 0, maximum: 0 });
-
-      return totals.maximum ? (totals.obtained / totals.maximum) * 100 : null;
-    }
-
-    return null;
-  };
-
-  // --- YOUTUBE URL'İNİ EMBED URL'İNE DÖNÜŞTÜRME ---
-const getYouTubeEmbedUrl = (url) => {
-  if (!url) return null;
-
-  let videoId = null;
-
-  try {
-    if (url.includes('youtube.com/watch')) {
-      const urlObj = new URL(url);
-      videoId = urlObj.searchParams.get('v');
-    } 
-    else if (url.includes('youtu.be/')) {
-      videoId = url.split('youtu.be/')[1]?.split('?')[0];
-    }
-    else if (url.includes('youtube.com/embed/')) {
-      videoId = url.split('embed/')[1]?.split('?')[0];
-    }
-    else if (url.includes('youtube.com/shorts/')) {
-      videoId = url.split('shorts/')[1]?.split('?')[0];
-    }
-
-    if (videoId) {
-      return `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-    }
-  } catch (err) {
-    console.error("URL dönüştürme hatası:", err);
-  }
-
-  return null;
-};
-
-// --- DEĞERLENDİRME LİMİTİNİ GÜNCELLEME ---
-const handleLimitUpdate = async () => {
-  const parsedLimit = Number(evaluationLimit);
-
-  if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
-    alert("Lütfen geçerli bir limit girin.");
-    return;
-  }
-
-  try {
-    const response = await api.settings.updateVideoLimit({ limit: parsedLimit, dersKodu: selectedCourse }, authHeaders);
-
-    if (response.ok) {
-      const data = response.data;
-      setEvaluationLimit(String(parsedLimit));
-      alert("✅ " + data.message);
-    } else {
-      alert("❌ Hata: " + response.error);
-    }
-  } catch (err) {
-    console.error("Güncelleme hatası:", err);
-    alert("Sunucuya bağlanılamadı. Backend terminalini kontrol et!");
-  }
-};
-
-// --- ÖĞRENCİ RAPORUNU EXCEL OLARAK İNDİRME ---
-  const exportToExcel = (student) => {
-    const genelHocaPuani = getGeneralTeacherScore(submissionDetail);
-    const data = [
-      ["ÖĞRENCİ PERFORMANS DETAYLI RAPORU"],
-      ["Ders:", selectedCourse.toUpperCase()],
-      ["Öğrenci:", student.ad_soyad],
-      ["Numara:", student.ogrenci_no],
-      ["Rapor Tarihi:", new Date().toLocaleDateString('tr-TR')],
-      [""]
-    ];
-
-    data.push(["GENEL HOCA PUANI"]);
-    data.push(["Puan:", genelHocaPuani ?? "Girilmedi"]);
-    data.push([""]);
-
-    data.push(["HOCANIN VERDİĞİ KRİTER PUANLARI"]);
-    if (submissionDetail?.hocaPuanlari?.length > 0) {
-      submissionDetail.hocaPuanlari.forEach((puan) => {
-        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
-      });
-      data.push(["Hoca Kriter Ortalaması:", formatAverage(submissionDetail?.istatistikler?.hocaGenelPuani)]);
-    } else {
-      data.push(["HOCANIN VERDİ?İ KRİTER PUANLARI", "Henüz puanlandırılmamış"]);
-    }
-
-    data.push([""]);
-    data.push(["HOCADAN ALDIĞI PUANLAR"]);
-    if (submissionDetail?.alinanHocaPuanlari?.length > 0) {
-      submissionDetail.alinanHocaPuanlari.forEach((puan) => {
-        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
-      });
-      data.push(["Hocadan Aldığı Ortalama:", formatAverage(submissionDetail?.istatistikler?.alinanHocaOrtalamasi)]);
-    } else {
-      data.push(["HOCADAN ALDI?I PUANLAR", "Henüz yok"]);
-    }
-
-    data.push([""]);
-    data.push(["AKRANLARDAN ALDI?I PUANLAR"]);
-    if (submissionDetail?.alinanAkranPuanlari?.length > 0) {
-      submissionDetail.alinanAkranPuanlari.forEach((puan) => {
-        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
-      });
-      data.push(["Akranlardan Aldığı Ortalama:", formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)]);
-    } else {
-      data.push(["AKRANLARDAN ALDI?I PUANLAR", "Henüz yok"]);
-    }
-
-    data.push(["Genel Alınan Ortalama:", formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama)]);
-    data.push([""]);
-
-    data.push(["Ö?RENCİNİN VERDİ?İ PUANLAR"]);
-    if (submissionDetail?.ogrenciVerdigiPuanlar?.length > 0) {
-      submissionDetail.ogrenciVerdigiPuanlar.forEach((puan) => {
-        data.push([puan.kriter_adi, puan.puan, `/ ${puan.max_puan}`]);
-      });
-      data.push(["Öğrencinin Verdiği Ortalama:", formatAverage(submissionDetail?.istatistikler?.verdigiOrtalama)]);
-    } else {
-      data.push(["Ö?RENCİNİN VERDİ?İ PUANLAR", "Henüz başkasını puanlamamış"]);
-    }
-
-    data.push([""]);
-    data.push(["ÖZET BİLGİLER"]);
-    data.push(["Proje Açıklaması:", submissionDetail?.proje_aciklamasi || "Yok"]);
-    data.push(["Video URL:", submissionDetail?.video_url || "Yok"]);
-
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws['!cols'] = [{ wch: 35 }, { wch: 20 }, { wch: 20 }];
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Detayli Rapor");
-    XLSX.writeFile(wb, `${student.ogrenci_no}_Detayli_Rapor_${new Date().getTime()}.xlsx`);
-  };
-
-
-  const exportUnregisteredStudentsToExcel = () => {
-    const unregisteredStudents = allStudents.filter(s => !s.isRegistered);
-    
-    if (unregisteredStudents.length === 0) {
-      alert("Kaydolmayan öğrenci bulunmamaktadır.");
-      return;
-    }
-
-    const data = [
-      ["KAYDOLMAYAN Ö?RENCİ LİSTESİ"],
-      ["Ders:", selectedCourse.toUpperCase()],
-      ["Tarih:", new Date().toLocaleDateString('tr-TR')],
-      ["Toplam:", unregisteredStudents.length],
-      [""],
-      ["Öğrenci No", "Ad Soyad"]
-    ];
-
-    unregisteredStudents.forEach(student => {
-      data.push([student.ogrenci_no, student.ad_soyad]);
+  const saveHocaPuanlari = async () => {
+    if (!Object.keys(hocaPuanlari).length) { alert('En az bir kritere puan verin!'); return; }
+    const r = await api.grades.create({
+      submissionId: reportModal.Submission.id, userId: user.id,
+      puanlananOgrenciId: reportModal.Submission.userId,
+      scores: Object.entries(hocaPuanlari).map(([id, p]) => ({ criterionId: parseInt(id), puan: parseInt(p) })),
     });
-
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws['!cols'] = [{ wch: 15 }, { wch: 30 }];
-    
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Kaydolmayanlar");
-    XLSX.writeFile(wb, `Kaydolmayan_Ogrenciler_${selectedCourse}_${new Date().getTime()}.xlsx`);
+    if (r.ok) { alert('Puanlar kaydedildi! ✅'); fetchData(); }
+    else alert(r.error);
   };
 
-  const filteredList = allStudents.filter(student => {
-    if (filterStatus === 'not_registered') return !student.isRegistered;
-    if (filterStatus === 'no_video') return student.isRegistered && !student.Submission;
+  const exportExcel = () => {
+    if (!submissionDetail || !reportModal) return;
+    const d = submissionDetail;
+    const rows = [
+      ['ÖĞRENCI RAPORU'], ['Ders:', selectedCourse], ['Öğrenci:', reportModal.ad_soyad], ['No:', reportModal.ogrenci_no], [''],
+      ['Aldığı Ortalama:', fmtAvg(d.istatistikler?.alinanGenelOrtalama)],
+      ['Akran Ortalaması:', fmtAvg(d.istatistikler?.alinanAkranOrtalamasi)],
+      ['Hoca Puanı:', fmtAvg(d.istatistikler?.hocaGenelPuani)],
+      ['Verdiği Ortalama:', fmtAvg(d.istatistikler?.verdigiOrtalama)],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rapor');
+    XLSX.writeFile(wb, `${reportModal.ogrenci_no}_Rapor.xlsx`);
+  };
+
+  const getEmbedUrl = (url) => {
+    if (!url) return null;
+    const match = url.match(/(?:youtu\.be\/|watch\?v=|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);
+    return match ? `https://www.youtube.com/embed/${match[1]}?rel=0` : null;
+  };
+
+  const filtered = allStudents.filter(s => {
+    if (filterStatus === 'not_registered') return !s.isRegistered;
+    if (filterStatus === 'no_video') return s.isRegistered && !s.Submission;
     return true;
   });
 
-  const formatAverage = (value) => Number(value || 0).toFixed(2);
-
-
-  // --- STİL OBJEKTLERİ ---
   return (
-    <div style={{ padding: '30px', backgroundColor: '#f4f7f6', minHeight: '100vh', fontFamily: 'Segoe UI' }}>
-      
-          
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', backgroundColor: '#fff', padding: '15px', borderRadius: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <h2 style={{ margin: 0 }}>Hoca Paneli</h2>
-          
-          <select 
-            value={selectedCourse} 
-            onChange={(e) => {
-              const ders = e.target.value;
-              setSelectedCourse(ders);
-              localStorage.setItem('selectedCourse', ders);
-            }}
-            style={{ padding: '8px', borderRadius: '5px', border: '1px solid #3498db', fontWeight: 'bold', color: '#3498db' }}
-          >
-            <option value="">--- Ders Seçin ---</option>
-            {accessibleCourses.map(course => (
-              <option key={course.ders_kodu} value={course.ders_kodu}>
-                {course.ders_adi}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <button onClick={() => { localStorage.clear(); navigate('/login'); }} style={btnStyle('#e74c3c')}>Çıkış Yap</button>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2.5fr', gap: '20px' }}>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <div style={cardStyle}>
-            <h4>⚙️ Puanlama Sınırı</h4>
-            <input type="number" min="1" value={evaluationLimit} onChange={(e) => setEvaluationLimit(e.target.value)} style={inputStyle} />
-            <button type="button" onClick={handleLimitUpdate} style={btnStyle('#f39c12', '100%')}>Limiti Güncelle</button>
-          </div>
-
-          <div style={cardStyle}>
-            <h4> Öğrenci Listesi Yükle</h4>
-            <select value={uploadCourse} onChange={(e) => setUploadCourse(e.target.value)} style={inputStyle}>
-              <option value="">--- Ders Seçin ---</option>
-              {accessibleCourses.map(course => (
-                <option key={course.ders_kodu} value={course.ders_kodu}>
-                  {course.ders_adi}
-                </option>
-              ))}
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-primary-800 text-white shadow-lg sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <span className="font-semibold hidden sm:block">🏫 Hoca Paneli</span>
+            <select
+              value={selectedCourse}
+              onChange={e => { setSelectedCourse(e.target.value); localStorage.setItem('selectedCourse', e.target.value); }}
+              className="bg-primary-700 border border-primary-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-white/30"
+            >
+              <option value="">— Ders Seçin —</option>
+              {accessibleCourses.map(c => <option key={c.ders_kodu} value={c.ders_kodu}>{c.ders_adi}</option>)}
             </select>
-            <input id="excelInput" type="file" accept=".xlsx, .xls" onChange={(e) => setSelectedFile(e.target.files[0])} style={{marginBottom:'10px', fontSize:'12px'}} />
-            <button onClick={handleUploadClick} disabled={!selectedFile} style={btnStyle(selectedFile ? '#27ae60' : '#ccc', '100%')}>Listeyi İşle</button>
           </div>
-
-          <div style={cardStyle}>
-            <h4> ️ Yeni Kriter Ekle</h4>
-            <form onSubmit={handleAddCriterion}>
-              <input type="text" placeholder="Kriter Adı" value={kriterAdi} onChange={(e) => setKriterAdi(e.target.value)} style={inputStyle} required />
-              <input type="number" placeholder="Max Puan" value={maxPuan} onChange={(e) => setMaxPuan(e.target.value)} style={inputStyle} required />
-              <button type="submit" style={btnStyle('#3498db', '100%')}>Kriteri Kaydet</button>
-            </form>
+          <div className="flex items-center gap-3">
+            <span className="text-primary-200 text-sm hidden md:block">{user?.ad_soyad}</span>
+            <button onClick={() => { localStorage.clear(); navigate('/login'); }}
+              className="text-sm text-primary-200 hover:text-white transition-colors">Çıkış</button>
           </div>
         </div>
+      </header>
 
-        <div style={cardStyle}>
-          <h3>  Tüm Öğrenci Takip Listesi</h3>
-          <div style={{marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-            <div>
-              <button onClick={() => setFilterStatus('all')} style={filterBtnStyle(filterStatus === 'all')}>Hepsi</button>
-              <button onClick={() => setFilterStatus('not_registered')} style={filterBtnStyle(filterStatus === 'not_registered')}>Kaydolmayanlar</button>
-              <button onClick={() => setFilterStatus('no_video')} style={filterBtnStyle(filterStatus === 'no_video')}>Video Yüklemeyenler</button>
-            </div>
-            {filterStatus === 'not_registered' && (
-              <button onClick={exportUnregisteredStudentsToExcel} style={btnStyle('#27ae60')}>  Listeyi İndir</button>
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+
+        {/* Üst kart satırı */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+          {/* Puanlama limiti */}
+          <div className="card p-5">
+            <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">⚙️ Puanlama Limiti</h4>
+            <input type="number" min="1" className="input-field mb-3" value={evaluationLimit} onChange={e => setEvaluationLimit(e.target.value)} />
+            <button onClick={async () => {
+              const r = await api.settings.updateVideoLimit({ limit: parseInt(evaluationLimit), dersKodu: selectedCourse }, authHeaders);
+              if (r.ok) alert('✅ ' + r.data.message); else alert('❌ ' + r.error);
+            }} className="btn-primary w-full">Güncelle</button>
+          </div>
+
+          {/* Öğrenci Listesi Yükleme */}
+          <div className="card p-5">
+            <h4 className="font-semibold text-gray-800 mb-3">📋 Öğrenci Listesi Yükle</h4>
+            <select className="input-field mb-2" value={uploadCourse} onChange={e => setUploadCourse(e.target.value)}>
+              <option value="">— Ders Seçin —</option>
+              {accessibleCourses.map(c => <option key={c.ders_kodu} value={c.ders_kodu}>{c.ders_adi}</option>)}
+            </select>
+            <input id="excelInput" type="file" accept=".xlsx,.xls" className="text-sm mb-2 w-full"
+              onChange={e => setSelectedFile(e.target.files[0])} />
+            <button onClick={handleUpload} disabled={!selectedFile} className="btn-primary w-full">Listeyi İşle</button>
+          </div>
+
+          {/* Kriter Ekle */}
+          <div className="card p-5">
+            <h4 className="font-semibold text-gray-800 mb-3">🎯 Kriter Ekle</h4>
+            <form onSubmit={handleAddCriterion} className="space-y-2">
+              <input className="input-field" placeholder="Kriter adı" value={kriterAdi} onChange={e => setKriterAdi(e.target.value)} required />
+              <input type="number" className="input-field" placeholder="Max puan" value={maxPuan} onChange={e => setMaxPuan(e.target.value)} required />
+              <button type="submit" className="btn-primary w-full">Ekle</button>
+            </form>
+            {criteria.length > 0 && (
+              <div className="mt-3 space-y-1">
+                {criteria.map(c => (
+                  <div key={c.id} className="flex items-center justify-between text-xs py-1 border-b border-gray-100">
+                    <span className="text-gray-700">{c.kriter_adi}</span>
+                    <span className="badge-blue">/{c.max_puan}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-          
-          <table style={{width: '100%', fontSize: '14px', borderCollapse:'collapse'}}>
-            <thead>
-              <tr style={{textAlign:'left', borderBottom:'2px solid #eee'}}>
-                <th style={{padding:'10px'}}>Öğrenci No</th>
-                <th style={{padding:'10px'}}>Ad Soyad </th>
-                <th style={{padding:'10px'}}>Durum</th>
-                <th style={{padding:'10px'}}>Aldığı Puan Ort.</th>
-                <th style={{padding:'10px'}}>Verdiği Puan Ort.</th>
-                <th style={{padding:'10px'}}>Genel Hoca Puanı</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredList.map(s => (
-                <tr key={s.id} style={{borderBottom:'1px solid #f9f9f9'}}>
-                  <td style={{padding:'10px'}}>{s.ogrenci_no}</td>
-                  <td 
-                    onClick={() => handleOpenStudentReport(s)}
-                    style={{padding:'10px', cursor:'pointer', color:'#2980b9', fontWeight:'bold', textDecoration:'underline'}}
-                  >
-                    {s.ad_soyad}
-                  </td>
-                  <td style={{padding:'10px'}}>
-                    {!s.isRegistered ? <span style={{color:'red'}}>❌ Kayıtsız</span> : 
-                     !s.Submission ? <span style={{color:'orange'}}>⚠️ Video Yok</span> : 
-                     <span style={{color:'green'}}>✅ Tamam</span>}
-                  </td>
-                  <td style={{padding:'10px'}}>{s.alinan_ortalama != null ? formatAverage(s.alinan_ortalama) : "---"}</td>
-                  <td style={{padding:'10px'}}>{s.verdigi_ortalama != null ? formatAverage(s.verdigi_ortalama) : "---"}</td>
-                  <td style={{padding:'10px', fontWeight:'bold'}}>{s.hoca_genel_puani ?? "---"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
-      </div>
 
-      <div style={{ marginTop: '25px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        <div style={cardStyle}>
-          <h4>  Ders Yönetimi</h4>
-          <button onClick={() => setIsAddCourseModalOpen(true)} style={btnStyle('#2ecc71', '100%', '10px')}>+ Yeni Ders Ekle</button>
-          
-          {courses.length > 0 ? (
-            <div style={{ marginTop: '15px' }}>
-              <p style={{ fontWeight: 'bold', marginBottom: '10px', fontSize: '13px' }}>Mevcut Dersler:</p>
-              {accessibleCourses.map(course => (
-                <div key={course.ders_kodu} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px', backgroundColor:'#ecf0f1', borderRadius:'5px', marginBottom:'8px', fontSize:'13px' }}>
+        {/* Öğrenci Tablosu */}
+        <div className="card overflow-hidden">
+          <div className="p-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <h3 className="font-semibold text-gray-900">📊 Öğrenci Takip Listesi</h3>
+              <span className="bg-primary-100 text-primary-700 text-xs font-semibold px-2.5 py-1 rounded-full">
+                {filtered.length} / {allStudents.length} öğrenci
+              </span>
+            </div>
+            <div className="flex gap-2">
+              {['all', 'not_registered', 'no_video'].map(f => (
+                <button key={f} onClick={() => setFilterStatus(f)}
+                  className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${filterStatus === f ? 'bg-primary-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {f === 'all' ? 'Tümü' : f === 'not_registered' ? 'Kayıtsız' : 'Video Yok'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+                <tr>
+                  <th className="px-3 py-3 text-center w-10">#</th>
+                  <th className="px-4 py-3 text-left">Öğrenci No</th>
+                  <th className="px-4 py-3 text-left">Ad Soyad</th>
+                  <th className="px-4 py-3 text-left">Durum</th>
+                  <th className="px-4 py-3 text-right">Aldığı Ort.</th>
+                  <th className="px-4 py-3 text-right">Verdiği Ort.</th>
+                  <th className="px-4 py-3 text-right">Hoca Puanı</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filtered.length === 0 ? (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Öğrenci bulunamadı.</td></tr>
+                ) : filtered.map((s, i) => (
+                  <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-3 py-3 text-center text-xs font-medium text-gray-400">{i + 1}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{s.ogrenci_no}</td>
+                    <td className="px-4 py-3">
+                      <button onClick={() => openReport(s)} className="font-medium text-primary-600 hover:text-primary-800 hover:underline text-left">
+                        {s.ad_soyad}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      {!s.isRegistered ? <span className="badge-red">Kayıtsız</span>
+                        : !s.Submission ? <span className="badge-amber">Video Yok</span>
+                        : <span className="badge-green">Tamam</span>}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtAvg(s.alinan_ortalama)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtAvg(s.verdigi_ortalama)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-gray-800">{s.hoca_genel_puani != null ? Number(s.hoca_genel_puani).toFixed(1) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Alt Kart Satırı: Ders Yönetimi + Hoca Yönetimi */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          {/* Ders Yönetimi */}
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="font-semibold text-gray-900">📚 Ders Yönetimi</h4>
+              <button onClick={() => setShowCourseModal(true)} className="btn-primary text-xs py-1.5 px-3">+ Ders Ekle</button>
+            </div>
+            <div className="space-y-2">
+              {accessibleCourses.length === 0 ? (
+                <p className="text-sm text-gray-400">Henüz ders eklenmemiş.</p>
+              ) : accessibleCourses.map(c => (
+                <div key={c.ders_kodu} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
                   <div>
-                    <strong>{course.ders_adi}</strong>
-                    <p style={{ margin:'4px 0 0 0', color:'#7f8c8d', fontSize:'12px' }}>{course.ders_kodu}</p>
+                    <div className="text-sm font-medium text-gray-900">{c.ders_adi}</div>
+                    <div className="text-xs text-gray-400 font-mono">{c.ders_kodu}</div>
                   </div>
-                  <button 
-                    onClick={() => handleDeleteCourse(course.ders_kodu)}
-                    style={{ padding:'5px 10px', backgroundColor:'#e74c3c', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'12px' }}
-                  >
+                  <button onClick={() => handleDeleteCourse(c.ders_kodu)}
+                    className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1 hover:bg-red-50 transition-colors">
                     Sil
                   </button>
                 </div>
               ))}
             </div>
-          ) : (
-            <p style={{ color:'#7f8c8d', marginTop:'10px', fontSize:'13px' }}>Henüz ders eklenmemiş</p>
-          )}
-        </div>
+          </div>
 
-        <div style={cardStyle}>
-          <h4> ‍  Yetkili Hoca Ekleyin</h4>
-          <form onSubmit={handleAddInstructor}>
-            <input
-              type="text"
-              placeholder="Hoca Kullanıcı Adı (Giriş Yapmak İçin Kullanılır)"
-              value={hocaOgrNo}
-              onChange={(e) => setHocaOgrNo(e.target.value)}
-              style={{ ...inputStyle, minHeight: '120px' }}
-              required
-            />
-            <input
-              type="text"
-              placeholder="Hoca Ad Soyad"
-              value={hocaAdSoyad}
-              onChange={(e) => setHocaAdSoyad(e.target.value)}
-              style={{ ...inputStyle, minHeight: '120px' }}
-              required
-            />
-            <input
-              type="password"
-              placeholder="?ifre"
-              value={hocaSifre}
-              onChange={(e) => setHocaSifre(e.target.value)}
-              style={{ ...inputStyle, minHeight: '120px' }}
-              required
-            />
-            <select
-              multiple
-              value={hocaAuthorizedCourse}
-              onChange={(e) => setHocaAuthorizedCourse(Array.from(e.target.selectedOptions, option => option.value))}
-              style={{ ...inputStyle, minHeight: '120px' }}
-              required
-            >
-              <option value="">--- Yetkili Ders Seçin ---</option>
-              {accessibleCourses.map(course => (
-                <option key={course.ders_kodu} value={course.ders_kodu}>
-                  {course.ders_adi} ({course.ders_kodu})
-                </option>
-              ))}
-            </select>
-            <button type="submit" style={btnStyle('#8e44ad', '100%')}>Hoca Ekle</button>
-          </form>
-
-          <div style={{ marginTop: '15px' }}>
-            <p style={{ fontWeight: 'bold', marginBottom: '10px', fontSize: '13px' }}>Kayıtlı Hocalar</p>
-            {instructors.length > 0 ? (
-              instructors.map(inst => (
-                <div key={inst.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px dashed #ddd' }}>
-                  <div>
-                    <strong>{inst.ad_soyad}</strong>
-                    <p style={{ margin: '4px 0 0 0', color: '#7f8c8d', fontSize: '12px' }}>
-                      {inst.ogrenci_no} | {(inst.authorized_courses || (inst.authorized_course || '').split(',').filter(Boolean)).join(', ')}
-                    </p>
+          {/* Hoca Yönetimi */}
+          <div className="card p-5">
+            <h4 className="font-semibold text-gray-900 mb-4">👩‍🏫 Hoca Yönetimi</h4>
+            <form onSubmit={handleAddInstructor} className="space-y-2 mb-4 pb-4 border-b border-gray-100">
+              <input className="input-field" placeholder="Kullanıcı adı" value={hocaForm.ogrenci_no} onChange={e => setHocaForm({ ...hocaForm, ogrenci_no: e.target.value })} required />
+              <input className="input-field" placeholder="Ad Soyad" value={hocaForm.ad_soyad} onChange={e => setHocaForm({ ...hocaForm, ad_soyad: e.target.value })} required />
+              <input className="input-field" type="password" placeholder="Şifre" value={hocaForm.sifre} onChange={e => setHocaForm({ ...hocaForm, sifre: e.target.value })} required />
+              <select multiple className="input-field" style={{ minHeight: '90px' }}
+                value={hocaForm.authorized_courses}
+                onChange={e => setHocaForm({ ...hocaForm, authorized_courses: Array.from(e.target.selectedOptions, o => o.value) })}
+                required>
+                {accessibleCourses.map(c => <option key={c.ders_kodu} value={c.ders_kodu}>{c.ders_adi} ({c.ders_kodu})</option>)}
+              </select>
+              <button type="submit" disabled={saving} className="btn-primary w-full">Hoca Ekle</button>
+            </form>
+            <div className="space-y-2">
+              {instructors.length === 0 ? <p className="text-sm text-gray-400">Henüz hoca tanımlanmadı.</p>
+                : instructors.map(i => (
+                  <div key={i.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{i.ad_soyad}</div>
+                      <div className="text-xs text-gray-400">{i.ogrenci_no} | {(i.authorized_courses || []).join(', ') || '—'}</div>
+                    </div>
+                    {user?.is_admin && (
+                      <button onClick={() => handleDeleteInstructor(i.id)}
+                        className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1 hover:bg-red-50 transition-colors ml-3">
+                        Sil
+                      </button>
+                    )}
                   </div>
-                  {user?.is_admin && (
-                    <button onClick={() => handleDeleteInstructor(inst.id)} style={{ ...btnStyle('#e74c3c', 'auto'), padding: '6px 10px', marginLeft: '10px' }}>
-                      Sil
-                    </button>
-                  )}
-                </div>
-              ))
-            ) : (
-              <p style={{ color: '#7f8c8d', fontSize: '13px' }}>Henüz hoca tanımlanmadı.</p>
-            )}
+                ))}
+            </div>
           </div>
         </div>
       </div>
 
-      {isReportModalOpen && selectedStudentReport && (
-        <div style={modalOverlayStyle}>
-          <div style={{...modalContentStyle, maxWidth: '1100px', height: '90vh', overflowY: 'auto'}}>
-            <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #eee', paddingBottom:'10px', marginBottom:'20px'}}>
-                <h3>  Öğrenci Detay Raporu</h3>
-                <button onClick={() => setIsReportModalOpen(false)} style={{border:'none', background:'none', cursor:'pointer', fontSize:'20px'}}>✕</button>
+      {/* Ders Ekleme Modalı */}
+      {showCourseModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setShowCourseModal(false)}>
+          <div className="card p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-semibold text-gray-900">Yeni Ders Ekle</h3>
+              <button onClick={() => setShowCourseModal(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
-            
-            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px', marginBottom:'20px'}}>
-              <div style={{backgroundColor:'#f9f9f9', padding:'15px', borderRadius:'8px'}}>
-                <h4 style={{marginTop: 0}}> Proje Videosu</h4>
-                {selectedStudentReport.Submission?.video_url && getYouTubeEmbedUrl(selectedStudentReport.Submission.video_url) ? (
-                  <iframe
-                    width="100%"
-                    height="300"
-                    src={getYouTubeEmbedUrl(selectedStudentReport.Submission.video_url)}
-                    title="Öğrenci Videosu"
-                    frameBorder="0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    style={{borderRadius: '8px'}}
-                  />
-                ) : (
-                  <div style={{backgroundColor: '#fff', padding: '20px', textAlign: 'center', borderRadius: '8px', color: '#999'}}>
-                      Video bulunamadı
-                  </div>
-                )}
-                <p style={{marginTop: '10px', fontSize: '12px', color: '#666'}}>
-                  <b>Video URL:</b> {selectedStudentReport.Submission?.video_url || "Yok"}
-                </p>
-              </div>
-
+            <form onSubmit={handleAddCourse} className="space-y-4">
               <div>
-                <div style={{backgroundColor:'#f9f9f9', padding:'15px', borderRadius:'8px', marginBottom:'15px'}}>
-                  <p><b>Öğrenci:</b> {selectedStudentReport.ad_soyad}</p>
-                  <p><b>No:</b> {selectedStudentReport.ogrenci_no}</p>
-                  <p><b>Aldigi Ortalama Puan:</b> {formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama)}</p>
-                  <p><b>Verdigi Ortalama Puan:</b> {formatAverage(submissionDetail?.istatistikler?.verdigiOrtalama)}</p>
-                  <p><b>Akran Ortalaması:</b> {formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)}</p>
-                  <p><b>Genel Hoca Puanı:</b> {getGeneralTeacherScore(submissionDetail) ?? "Girilmedi"}</p>
-                </div>
-
-                <div style={{backgroundColor:'#fff3cd', padding:'15px', borderRadius:'8px', marginBottom:'15px'}}>
-                  <label><b>  Proje Açıklaması:</b></label>
-                  <p style={{backgroundColor:'#fff', padding:'10px', borderRadius:'5px', minHeight:'80px'}}>
-                    {selectedStudentReport.Submission?.proje_aciklamasi || "Açıklama girilmemiş"}
-                  </p>
-                </div>
-
-                <button onClick={() => exportToExcel(selectedStudentReport)} style={{...btnStyle('#2c3e50'), marginTop:'15px', width:'100%'}}>  Excel Raporu Al</button>
+                <label className="label">Ders Kodu *</label>
+                <input className="input-field" placeholder="örn: web_programlama"
+                  value={courseForm.ders_kodu} onChange={e => setCourseForm({ ...courseForm, ders_kodu: e.target.value.toLowerCase() })} required />
               </div>
-            </div>
-
-            {submissionDetail && (
-              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px', marginBottom:'20px'}}>
-                <div style={{backgroundColor:'#f8fbff', padding:'15px', borderRadius:'8px', border:'1px solid #d6eaff'}}>
-                  <h4 style={{marginTop:0}}>Öğrencilerden Aldığı Puanlar</h4>
-                  <p><b>Öğrenci Ortalaması:</b> {formatAverage(submissionDetail?.istatistikler?.alinanAkranOrtalamasi)}</p>
-                  <p><b>Genel Ortalama:</b> {formatAverage(submissionDetail?.istatistikler?.alinanGenelOrtalama)}</p>
-                  <div style={{maxHeight:'130px', overflowY:'auto', marginTop:'10px', padding:'10px', backgroundColor:'#fff', borderRadius:'6px', border:'1px solid #eef4fb'}}>
-                    {submissionDetail.alinanAkranPuanlari?.length > 0 ? submissionDetail.alinanAkranPuanlari.map(puan => (
-                      <div key={`alinan-akran-${puan.id}`} style={{padding:'8px', backgroundColor:'#fff', borderRadius:'6px', marginBottom:'8px', border:'1px solid #eef4fb'}}>
-                        <div style={{fontWeight:'bold'}}>{puan.kriter_adi || 'Kriter'}</div>
-                        <div>{puan.puan} / {puan.max_puan || '-'}</div>
-                        <div style={{fontSize:'12px', color:'#666'}}>Veren: {puan.veren || '-'} ({puan.verenRol === 'hoca' ? 'Hoca' : 'Öğrenci'})</div>
-                      </div>
-                    )) : <p style={{color:'#7f8c8d', margin:0}}>Akran puanı yok.</p>}
-                  </div>
-                </div>
-
-                <div style={{backgroundColor:'#fffaf2', padding:'15px', borderRadius:'8px', border:'1px solid #f3dfb0'}}>
-                  <h4 style={{marginTop:0}}>Verdigi Puanlar</h4>
-                  <p><b>Verdigi Ortalama:</b> {formatAverage(submissionDetail?.istatistikler?.verdigiOrtalama)}</p>
-                  <div style={{maxHeight:'220px', overflowY:'auto', marginTop:'10px'}}>
-                    {submissionDetail.ogrenciVerdigiPuanlar?.length > 0 ? submissionDetail.ogrenciVerdigiPuanlar.map(puan => (
-                      <div key={`verdigi-${puan.id}`} style={{padding:'10px', backgroundColor:'#fff', borderRadius:'6px', marginBottom:'8px', border:'1px solid #f8edd1'}}>
-                        <div style={{fontWeight:'bold'}}>{puan.kriter_adi || 'Kriter'}</div>
-                        <div>{puan.puan} / {puan.max_puan || '-'}</div>
-                        <div style={{fontSize:'12px', color:'#666'}}>Puanlanan: {puan.puanlananOgrenci || '-'} ({puan.puanlananOgrenciNo || '-'})</div>
-                      </div>
-                    )) : <p style={{color:'#7f8c8d'}}>Henuz baskalarina puan vermemis.</p>}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {criteria.length > 0 && (
-              <div style={{marginTop: '20px', borderTop: '2px solid #eee', paddingTop: '20px'}}>
-                <h4>⭐ Kriterlere Puan Ver</h4>
-                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '15px'}}>
-                  {criteria.map(criterion => (
-                    <div key={criterion.id} style={{backgroundColor: '#f0f8ff', padding: '15px', borderRadius: '8px', border: '1px solid #b3d9ff'}}>
-                      <label style={{fontWeight: 'bold', display: 'block', marginBottom: '8px'}}>
-                        {criterion.kriter_adi}
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max={criterion.max_puan}
-                        placeholder={`Maks: ${criterion.max_puan}`}
-                        value={hocaKriterPuanlari[criterion.id] || ''}
-                        onChange={(e) => setHocaKriterPuanlari({
-                          ...hocaKriterPuanlari,
-                          [criterion.id]: e.target.value
-                        })}
-                        style={{...inputStyle, marginBottom: '0'}}
-                      />
-                      <small style={{color: '#666'}}>Max: {criterion.max_puan}</small>
-                    </div>
-                  ))}
-                </div>
-                <button 
-                  onClick={() => handleKriterPuanlariKaydet(selectedStudentReport.Submission.id)} 
-                  style={{...btnStyle('#ff6b6b'), marginTop: '15px', width: '100%'}}
-                >
-                    Kriter Puanlarını Kaydet
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {isAddCourseModalOpen && (
-        <div style={modalOverlayStyle}>
-          <div style={modalContentStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0 }}>  Yeni Ders Ekle</h3>
-              <button 
-                onClick={() => {
-                  setIsAddCourseModalOpen(false);
-                  setDersKodu('');
-                  setDersAdi('');
-                  setAciklama('');
-                }}
-                style={{ fontSize: '24px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-            
-            <form onSubmit={handleAddCourse}>
               <div>
-                <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>Ders Kodu *</label>
-                <input 
-                  type="text" 
-                  placeholder="örn: internet_programlama"
-                  value={dersKodu} 
-                  onChange={(e) => setDersKodu(e.target.value.toLowerCase())} 
-                  style={inputStyle} 
-                  required 
-                />
+                <label className="label">Ders Adı *</label>
+                <input className="input-field" placeholder="örn: Web Programlama"
+                  value={courseForm.ders_adi} onChange={e => setCourseForm({ ...courseForm, ders_adi: e.target.value })} required />
               </div>
-
               <div>
-                <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>Ders Adı *</label>
-                <input 
-                  type="text" 
-                  placeholder="örn: İnternet Programcılığı"
-                  value={dersAdi} 
-                  onChange={(e) => setDersAdi(e.target.value)} 
-                  style={inputStyle} 
-                  required 
-                />
+                <label className="label">Açıklama</label>
+                <textarea className="input-field" rows={2} value={courseForm.aciklama} onChange={e => setCourseForm({ ...courseForm, aciklama: e.target.value })} />
               </div>
-
-              <div>
-                <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>Açıklama</label>
-                <textarea 
-                  placeholder="Ders açıklaması yazınız..."
-                  value={aciklama} 
-                  onChange={(e) => setAciklama(e.target.value)} 
-                  style={{ width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '5px', border: '1px solid #ddd', boxSizing: 'border-box', minHeight: '80px', fontFamily: 'inherit' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setIsAddCourseModalOpen(false);
-                    setDersKodu('');
-                    setDersAdi('');
-                    setAciklama('');
-                  }}
-                  style={btnStyle('#95a5a6')}
-                >
-                  İptal
-                </button>
-                <button 
-                  type="submit"
-                  style={btnStyle('#2ecc71')}
-                >
-                  ✓ Ders Ekle
-                </button>
+              <div className="flex gap-3 pt-1">
+                <button type="submit" disabled={saving} className="btn-primary flex-1">{saving ? 'Ekleniyor...' : 'Ders Ekle'}</button>
+                <button type="button" onClick={() => setShowCourseModal(false)} className="btn-secondary">İptal</button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* Öğrenci Rapor Modalı */}
+      {reportModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="card w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white z-10">
+              <h3 className="font-semibold text-gray-900">📋 {reportModal.ad_soyad} — Detay Raporu</h3>
+              <div className="flex gap-2">
+                <button onClick={exportExcel} className="btn-secondary text-xs py-1.5">Excel İndir</button>
+                <button onClick={() => { setReportModal(null); setSubmissionDetail(null); }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+              </div>
+            </div>
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* Video */}
+              <div>
+                <h4 className="font-medium text-gray-800 mb-2">🎬 Proje Videosu</h4>
+                {reportModal.Submission?.video_url && getEmbedUrl(reportModal.Submission.video_url) ? (
+                  <iframe className="w-full aspect-video rounded-lg border" src={getEmbedUrl(reportModal.Submission.video_url)} allowFullScreen title="Video" />
+                ) : (
+                  <div className="bg-gray-100 rounded-lg aspect-video flex items-center justify-center text-gray-400 text-sm">
+                    Video önizleme yüklenemedi
+                  </div>
+                )}
+                {reportModal.Submission?.video_url && (
+                  <a href={reportModal.Submission.video_url} target="_blank" rel="noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 text-xs text-primary-600 hover:underline">
+                    🔗 Videoyu yeni sekmede aç
+                  </a>
+                )}
+              </div>
+
+              {/* İstatistikler */}
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { label: 'Aldığı Ort.', val: submissionDetail?.istatistikler?.alinanGenelOrtalama },
+                    { label: 'Akran Ort.', val: submissionDetail?.istatistikler?.alinanAkranOrtalamasi },
+                    { label: 'Hoca Puanı', val: submissionDetail?.istatistikler?.hocaGenelPuani },
+                    { label: 'Verdiği Ort.', val: submissionDetail?.istatistikler?.verdigiOrtalama },
+                  ].map(({ label, val }) => (
+                    <div key={label} className="bg-gray-50 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-primary-700">{fmtAvg(val)}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm text-gray-700">
+                  <strong className="text-amber-700 block mb-1">Proje Açıklaması:</strong>
+                  {reportModal.Submission?.proje_aciklamasi || <span className="text-gray-400 italic">Açıklama girilmemiş.</span>}
+                </div>
+                {!submissionDetail && (
+                  <div className="text-xs text-gray-400 text-center py-2">Detaylar yükleniyor...</div>
+                )}
+              </div>
+            </div>
+
+            {/* Kriter Puanlama */}
+            <div className="p-5 border-t border-gray-100">
+              <h4 className="font-semibold text-gray-900 mb-3">⭐ Kriter Puanları Ver</h4>
+              {criteria.length === 0 ? (
+                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  ⚠️ Bu ders için henüz kriter tanımlanmamış. Sol paneldeki <strong>"Kriter Ekle"</strong> bölümünden kriter ekleyin.
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                    {criteria.map(c => (
+                      <div key={c.id} className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+                        <div className="text-sm font-medium text-gray-800 mb-1.5">{c.kriter_adi}</div>
+                        <input type="number" min={0} max={c.max_puan}
+                          className="input-field text-sm"
+                          placeholder={`Maks: ${c.max_puan}`}
+                          value={hocaPuanlari[c.id] ?? ''}
+                          onChange={e => setHocaPuanlari({ ...hocaPuanlari, [c.id]: e.target.value })} />
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={saveHocaPuanlari} className="btn-primary w-full">Puanları Kaydet</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
-
-const cardStyle = { backgroundColor: '#fff', padding: '20px', borderRadius: '10px', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' };
-const inputStyle = { width: '100%', padding: '8px', marginBottom: '10px', borderRadius: '5px', border: '1px solid #ddd', boxSizing: 'border-box' };
-const btnStyle = (color, width = 'auto', marginTop = '0') => ({ backgroundColor: color, color: 'white', border: 'none', padding: '10px 15px', borderRadius: '5px', cursor: 'pointer', width: width, fontWeight: 'bold', marginLeft: width === 'auto' ? '10px' : '0', marginTop: marginTop });
-const filterBtnStyle = (isActive) => ({ backgroundColor: isActive ? '#3498db' : '#ecf0f1', color: isActive ? 'white' : '#2c3e50', border: 'none', padding: '8px 12px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', marginRight: '5px' });
-const modalOverlayStyle = { position:'fixed', top:0, left:0, width:'100%', height:'100%', backgroundColor:'rgba(0,0,0,0.7)', display:'flex', justifyContent:'center', alignItems:'center', zIndex:1000, padding: '10px' };
-const modalContentStyle = { backgroundColor:'#fff', padding:'30px', borderRadius:'15px', width:'95%', maxWidth: '1000px', boxShadow: '0 10px 40px rgba(0,0,0,0.3)' };
-
-export default AdminPanel;
+}

@@ -1,24 +1,20 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { connectDB, sequelize } = require('./db');
-const { User, Criterion, Submission, Grade, AllowedStudent, Settings, Course, verifyPassword, needsPasswordRehash } = require('./models');
-const { Op } = require('sequelize'); 
+const { sequelize, connectDB } = require('./db');
+require('./models');
+//const prisma = require('./src/prisma');
+const { hashPassword, verifyPassword, needsRehash } = require('./src/auth');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const DEFAULT_VIDEO_LIMIT = 3;
+// ─── Yardımcı fonksiyonlar ────────────────────────────────────────────────────
 
-const parseCourseList = (value) => {
-  if (Array.isArray(value)) {
-    return [...new Set(value.map((course) => String(course || '').trim()).filter(Boolean))];
-  }
-
-  if (typeof value === 'string') {
-    return [...new Set(value.split(',').map((course) => course.trim()).filter(Boolean))];
-  }
-
+const parseDersler = (val) => {
+  if (Array.isArray(val)) return [...new Set(val.map(String).map(s => s.trim()).filter(Boolean))];
+  if (typeof val === 'string') return [...new Set(val.split(',').map(s => s.trim()).filter(Boolean))];
   return [];
 };
 
@@ -27,1135 +23,518 @@ const hasCourseAccess = (authorizedCourses, courseCode) => {
   return authorizedCourses.includes(String(courseCode).trim());
 };
 
-const getVideoLimitKey = (dersKodu) => dersKodu ? `video_limit:${String(dersKodu).trim()}` : 'video_limit';
+const normNo = (v) => String(v || '').trim();
+const normName = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+const normNameLC = (v) => normName(v).toLocaleLowerCase('tr-TR');
 
+const getVideoLimitKey = (dersKodu) =>
+  dersKodu ? `video_limit:${String(dersKodu).trim()}` : 'video_limit';
+
+const DEFAULT_LIMIT = 3;
 const getEvaluationLimit = async (dersKodu) => {
-  const courseKey = getVideoLimitKey(dersKodu);
-  const setting = await Settings.findOne({
-    where: { key: { [Op.in]: [courseKey, 'video_limit'] } },
-    order: [['key', 'ASC']]
+  const key = getVideoLimitKey(dersKodu);
+  const row = await prisma.setting.findFirst({
+    where: { key: { in: [key, 'video_limit'] } },
+    orderBy: { key: 'asc' },
   });
-  const parsedLimit = Number(setting?.value);
-  return Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_VIDEO_LIMIT;
+  const n = Number(row?.value);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_LIMIT;
 };
 
-const normalizeStudentNumber = (value) => String(value || '').trim();
-
-const normalizeName = (value) =>
-  String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const normalizeNameForCompare = (value) => normalizeName(value).toLocaleLowerCase('tr-TR');
-
-const isAdminInstructor = async (user) => {
+const isAdminUser = async (user) => {
   if (!user || user.rol !== 'hoca') return false;
   if (user.is_admin) return true;
-
-  const firstInstructor = await User.findOne({
-    where: { rol: 'hoca' },
-    order: [['id', 'ASC']]
-  });
-
-  return !!firstInstructor && firstInstructor.id === user.id;
+  const first = await prisma.user.findFirst({ where: { rol: 'hoca' }, orderBy: { id: 'asc' } });
+  return !!first && first.id === user.id;
 };
 
-const getUserEvaluatedSubmissionIdsForCourse = async (userId, dersKodu) => {
-  const grades = await Grade.findAll({
-    where: { puan_veren_id: userId },
-    include: [{
-      model: Submission,
-      attributes: [],
-      where: { ders_kodu: dersKodu }
-    }],
-    attributes: ['SubmissionId'],
-    group: ['SubmissionId']
-  });
-
-  return grades.map(grade => grade.SubmissionId);
+const weightedAvg = (grades) => {
+  const totals = grades.reduce((acc, g) => {
+    const p = Number(g.puan), m = Number(g.criterion?.max_puan ?? g.max_puan);
+    if (!Number.isFinite(p) || !Number.isFinite(m) || m <= 0) return acc;
+    acc.sum += p; acc.max += m; return acc;
+  }, { sum: 0, max: 0 });
+  return totals.max ? (totals.sum / totals.max) * 100 : null;
 };
 
-const pickRandomSubmissionForEvaluation = async (whereCondition) => {
-  const eligibleSubmissions = await Submission.findAll({
-    where: whereCondition,
-    attributes: ['id']
-  });
+// ─── Admin middleware ─────────────────────────────────────────────────────────
 
-  if (!eligibleSubmissions.length) {
-    return null;
-  }
-
-  const eligibleIds = eligibleSubmissions.map((submission) => submission.id);
-
-  const gradedSubmissionIds = await Grade.findAll({
-    where: {
-      SubmissionId: { [Op.in]: eligibleIds }
-    },
-    attributes: ['SubmissionId'],
-    group: ['SubmissionId'],
-    raw: true
-  });
-
-  const gradedIdSet = new Set(gradedSubmissionIds.map((grade) => grade.SubmissionId));
-  const ungradedIds = eligibleIds.filter((id) => !gradedIdSet.has(id));
-  const targetIds = ungradedIds.length > 0 ? ungradedIds : eligibleIds;
-
-  return Submission.findOne({
-    where: { id: { [Op.in]: targetIds } },
-    include: [{ model: User, attributes: ['ad_soyad', 'id'] }],
-    order: [sequelize.fn('RANDOM')]
-  });
-};
-
-const calculateGeneralTeacherScore = (teacherGrades = []) => {
-  const totals = teacherGrades.reduce((acc, grade) => {
-    const puan = Number(grade?.puan);
-    const maxPuan = Number(grade?.max_puan);
-
-    if (!Number.isFinite(puan) || !Number.isFinite(maxPuan) || maxPuan <= 0) {
-      return acc;
-    }
-
-    acc.obtained += puan;
-    acc.maximum += maxPuan;
-    return acc;
-  }, { obtained: 0, maximum: 0 });
-
-  if (!totals.maximum) {
-    return null;
-  }
-
-  return (totals.obtained / totals.maximum) * 100;
-};
-
-const calculateWeightedAverage = (grades = []) => {
-  const totals = grades.reduce((acc, grade) => {
-    const puan = Number(grade?.puan);
-    const maxPuan = Number(grade?.max_puan);
-
-    if (!Number.isFinite(puan) || !Number.isFinite(maxPuan) || maxPuan <= 0) {
-      return acc;
-    }
-
-    acc.obtained += puan;
-    acc.maximum += maxPuan;
-    return acc;
-  }, { obtained: 0, maximum: 0 });
-
-  if (!totals.maximum) {
-    return null;
-  }
-
-  return (totals.obtained / totals.maximum) * 100;
-};
-
-// --- MIDDLEWARE ---
 const adminKontrol = async (req, res, next) => {
   try {
     const userId = req.headers['x-user-id'];
-
-    if (!userId) {
-      return res.status(401).json({ error: 'Yetkilendirme bilgisi eksik.' });
-    }
-
-    const user = await User.findByPk(userId);
-
-    if (!user || user.rol !== 'hoca') {
-      return res.status(403).json({ error: 'Bu islem icin hoca yetkisi gerekiyor.' });
-    }
-
+    if (!userId) return res.status(401).json({ error: 'Yetkilendirme bilgisi eksik.' });
+    const user = await prisma.user.findUnique({ where: { id: parseInt(userId) } });
+    if (!user || user.rol !== 'hoca') return res.status(403).json({ error: 'Bu işlem için hoca yetkisi gerekiyor.' });
     req.currentUser = user;
-    req.authorizedCourses = parseCourseList(user.authorized_course);
-    req.isAdmin = await isAdminInstructor(user);
+    req.isAdmin = await isAdminUser(user);
+    if (req.isAdmin) {
+      const courses = await prisma.course.findMany({ select: { ders_kodu: true } });
+      req.authorizedCourses = courses.map(c => c.ders_kodu);
+    } else {
+      req.authorizedCourses = parseDersler(user.authorized_course);
+    }
     next();
-  } catch (error) {
-    console.error('adminKontrol hatasi:', error);
-    res.status(500).json({ error: 'Yetki kontrolu yapilamadi.' });
+  } catch (err) {
+    console.error('adminKontrol:', err);
+    res.status(500).json({ error: 'Yetki kontrolü yapılamadı.' });
   }
 };
 
-// --- ROTALAR ---
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
 
-// KAYIT OLMA
 app.post('/api/auth/register', async (req, res) => {
   const { ogrenci_no, ad_soyad, sifre, secilenDersler } = req.body;
-  const normalizedOgrenciNo = normalizeStudentNumber(ogrenci_no);
-  const normalizedAdSoyad = normalizeName(ad_soyad);
-
+  const no = normNo(ogrenci_no);
+  const isim = normName(ad_soyad);
   try {
-    const allowed = await AllowedStudent.findOne({ where: { ogrenci_no: normalizedOgrenciNo } });
+    const allowed = await prisma.allowedStudent.findUnique({ where: { ogrenci_no: no } });
+    if (!allowed) return res.status(403).json({ error: 'Öğrenci numaranız sistemde tanımlı değil. Lütfen hocanızla iletişime geçin.' });
+    if (normNameLC(allowed.ad_soyad) !== normNameLC(isim)) return res.status(403).json({ error: 'Ad soyad bilgisi kayıtla eşleşmiyor.' });
 
-    if (!allowed) {
-      return res.status(403).json({ error: "Öğrenci numaranız sistemde tanımlı değil. Lütfen hocanızla iletişime geçin." });
-    }
+    const existing = await prisma.user.findUnique({ where: { ogrenci_no: no } });
+    if (existing) return res.status(409).json({ error: 'Bu öğrenci numarasıyla zaten kayıt olunmuş.' });
 
-    if (normalizeNameForCompare(allowed.ad_soyad) !== normalizeNameForCompare(normalizedAdSoyad)) {
-      return res.status(403).json({ error: "Ad soyad bilgisi okul listesindeki kayÄ±t ile eÅŸleÅŸmiyor." });
-    }
+    const izinliDersler = parseDersler(allowed.dersler);
+    const yetkisiz = (secilenDersler || []).find(d => !izinliDersler.includes(d));
+    if (yetkisiz) return res.status(403).json({ error: `${yetkisiz} dersini almaya yetkiniz görünmüyor.` });
 
-    const existingUser = await User.findOne({ where: { ogrenci_no: normalizedOgrenciNo } });
-
-    if (existingUser) {
-      return res.status(409).json({ error: "Bu Ã¶ÄŸrenci numarasÄ± ile zaten kayÄ±t olunmuÅŸ." });
-    }
-
-    const hocaDersleri = allowed.dersler.split(',');
-    const yetkisizDers = secilenDersler.find(d => !hocaDersleri.includes(d));
-
-    if (yetkisizDers) {
-      return res.status(403).json({ error: `${yetkisizDers} dersini almaya yetkiniz görünmüyor.` });
-    }
-
-  
-    const newUser = await User.create({
-      ogrenci_no: normalizedOgrenciNo,
-      ad_soyad: normalizedAdSoyad,
-      sifre,
-      rol: 'ogrenci'
-    });
-
-    res.json({ message: "Kayıt başarılı" });
-  } catch (error) {
-    res.status(500).json({ error: "Kayıt hatası" });
+    const hashedSifre = await hashPassword(sifre);
+    await prisma.user.create({ data: { ogrenci_no: no, ad_soyad: isim, sifre: hashedSifre, rol: 'ogrenci' } });
+    res.json({ message: 'Kayıt başarılı' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Kayıt hatası' });
   }
 });
 
-// GİRİŞ YAPMA
 app.post('/api/auth/login', async (req, res) => {
   const { ogrenci_no, sifre } = req.body;
-  const normalizedOgrenciNo = normalizeStudentNumber(ogrenci_no);
-
+  const no = normNo(ogrenci_no);
   try {
-    const user = await User.findOne({
-      where: {
-        ogrenci_no: normalizedOgrenciNo
-      }
-    });
-
+    const user = await prisma.user.findUnique({ where: { ogrenci_no: no } });
     if (!user || !(await verifyPassword(sifre, user.sifre))) {
-      return res.status(401).json({ error: "Hatalı numara veya şifre!" });
+      return res.status(401).json({ error: 'Hatalı kullanıcı adı veya şifre!' });
     }
-
-    if (needsPasswordRehash(user.sifre)) {
-      user.sifre = sifre;
-      await user.save();
+    if (needsRehash(user.sifre)) {
+      await prisma.user.update({ where: { id: user.id }, data: { sifre: await hashPassword(sifre) } });
     }
-
-    let dersListesi = [];
+    let dersler = [];
     if (user.rol === 'ogrenci') {
-      const allowed = await AllowedStudent.findOne({ where: { ogrenci_no: normalizedOgrenciNo } });
-      console.log(`🔐 Login: ${normalizedOgrenciNo} öğrenci kaydı:`, allowed);
-      
-      if (allowed && allowed.dersler) {
-        dersListesi = allowed.dersler.split(',').map(d => d.trim()).filter(d => d.length > 0);
-        console.log(`📚 Dersleri parse edildı:`, dersListesi);
-      } else {
-        console.log(`⚠️ ${normalizedOgrenciNo} için AllowedStudent kaydı bulunamadı!`);
-      }
-    } else if (user.rol === 'hoca') {
-      dersListesi = parseCourseList(user.authorized_course);
+      const allowed = await prisma.allowedStudent.findUnique({ where: { ogrenci_no: no } });
+      dersler = allowed ? parseDersler(allowed.dersler) : [];
+    } else {
+      dersler = parseDersler(user.authorized_course);
     }
-
     res.json({
-      message: "Giriş başarılı",
-      user: {
-        id: user.id,
-        ad_soyad: user.ad_soyad,
-        ogrenci_no: user.ogrenci_no,
-        rol: user.rol,
-        is_admin: user.rol === 'hoca' ? await isAdminInstructor(user) : false,
-        dersler: dersListesi
-      }
+      message: 'Giriş başarılı',
+      user: { id: user.id, ad_soyad: user.ad_soyad, ogrenci_no: user.ogrenci_no, rol: user.rol, is_admin: await isAdminUser(user), dersler },
     });
-  } catch (error) {
-    console.error("❌ Login Hatası:", error);
-    res.status(500).json({ error: "Sunucu hatası" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Sunucu hatası' });
   }
 });
 
+// ─── ÖĞRENCİ LİSTESİ YÜKLEME ─────────────────────────────────────────────────
 
-// --- ÖĞRENCİ LİSTESİ YÜKLEME ---
-app.post('/api/admin/upload-students', async (req, res) => {
+app.post('/api/admin/upload-students', adminKontrol, async (req, res) => {
   const { students, secilenDers } = req.body;
-
+  if (!hasCourseAccess(req.authorizedCourses, secilenDers)) {
+    return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
+  }
   try {
-    const actingUser = await User.findByPk(req.headers['x-user-id']);
-
-    if (!actingUser || actingUser.rol !== 'hoca') {
-      return res.status(403).json({ error: 'Bu islem icin hoca yetkisi gerekiyor.' });
-    }
-
-    if (!hasCourseAccess(parseCourseList(actingUser.authorized_course), secilenDers)) {
-      return res.status(403).json({ error: 'Bu ders icin yetkiniz yok.' });
-    }
-
-    const gercekOgrenciler = students.slice(2); 
-    const existingStudents = await AllowedStudent.findAll();
-    const existingByNormalizedNo = new Map();
-
-    existingStudents.forEach((student) => {
-      const normalizedNo = normalizeStudentNumber(student.ogrenci_no);
-      if (!normalizedNo) return;
-
-      const sameStudents = existingByNormalizedNo.get(normalizedNo) || [];
-      sameStudents.push(student);
-      existingByNormalizedNo.set(normalizedNo, sameStudents);
-    });
-
-    for (const s of gercekOgrenciler) {
-      const ogrenci_no = normalizeStudentNumber(s["__EMPTY"]);
-      const adSoyad = normalizeName(s["__EMPTY_1"]);
-
-      if (!ogrenci_no || ogrenci_no === "Öğrenci No") continue;
-
-      const matchingRecords = existingByNormalizedNo.get(ogrenci_no) || [];
-      let record = matchingRecords[0];
-
-      if (record) {
-        let mevcutDersler = parseCourseList(record.dersler);
-        if (!mevcutDersler.includes(secilenDers)) {
-          mevcutDersler.push(secilenDers);
-        }
-
-        record.ogrenci_no = ogrenci_no;
-        record.ad_soyad = normalizeName(record.ad_soyad) || adSoyad;
-
-        if (matchingRecords.length > 1) {
-          for (const duplicateRecord of matchingRecords.slice(1)) {
-            mevcutDersler = [...new Set([...mevcutDersler, ...parseCourseList(duplicateRecord.dersler)])];
-
-            if (!record.ad_soyad) {
-              record.ad_soyad = normalizeName(duplicateRecord.ad_soyad);
-            }
-
-            await duplicateRecord.destroy();
-          }
-        }
-
-        record.dersler = mevcutDersler.join(',');
-        await record.save();
-        existingByNormalizedNo.set(ogrenci_no, [record]);
+    const rows = (students || []).slice(2);
+    for (const s of rows) {
+      const no = normNo(s['__EMPTY']);
+      const isim = normName(s['__EMPTY_1']);
+      if (!no || no === 'Öğrenci No') continue;
+      const existing = await prisma.allowedStudent.findUnique({ where: { ogrenci_no: no } });
+      if (existing) {
+        const dersler = parseDersler(existing.dersler);
+        if (!dersler.includes(secilenDers)) dersler.push(secilenDers);
+        await prisma.allowedStudent.update({ where: { id: existing.id }, data: { dersler: dersler.join(','), ad_soyad: existing.ad_soyad || isim } });
       } else {
-        const created = await AllowedStudent.create({
-          ogrenci_no,
-          ad_soyad: adSoyad,
-          dersler: secilenDers
-        });
-        existingByNormalizedNo.set(ogrenci_no, [created]);
+        await prisma.allowedStudent.create({ data: { ogrenci_no: no, ad_soyad: isim, dersler: secilenDers } });
       }
     }
     res.json({ message: 'Öğrenciler başarıyla listeye eklendi!' });
-  } catch (error) {
-    console.error("Yükleme Hatası:", error);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Veritabanına kaydedilirken hata oluştu.' });
   }
 });
 
-// HOCA PUANI KAYDET
-app.post('/api/admin/grade-submission', async (req, res) => {
-  const { submissionId, hocaId, puan } = req.body;
+// ─── DERSLER ──────────────────────────────────────────────────────────────────
+
+app.get('/api/courses', async (req, res) => {
   try {
-    const actingUser = await User.findByPk(req.headers['x-user-id']);
-    if (!actingUser || actingUser.rol !== 'hoca') {
-      return res.status(403).json({ error: 'Bu islem icin hoca yetkisi gerekiyor.' });
-    }
-    const submission = await Submission.findByPk(submissionId);
-    if (!submission) return res.status(404).json({ error: 'Submission bulunamadı.' });
-    if (!hasCourseAccess(parseCourseList(actingUser.authorized_course), submission.ders_kodu)) {
-      return res.status(403).json({ error: 'Bu ders icin yetkiniz yok.' });
-    }
-    submission.hoca_puani = puan;
-    await submission.save();
-    res.json({ message: 'Hoca puanı kaydedildi.' });
-  } catch (error) {
-    res.status(500).json({ error: 'Hata.' });
-  }   
+    const courses = await prisma.course.findMany({ orderBy: { ders_adi: 'asc' } });
+    res.json(courses);
+  } catch (err) { res.status(500).json({ error: 'Dersler yüklenemedi.' }); }
 });
 
-// VİDEO YÜKLEME 
+app.post('/api/courses', adminKontrol, async (req, res) => {
+  const { ders_kodu, ders_adi, aciklama } = req.body;
+  if (!ders_kodu || !ders_adi) return res.status(400).json({ error: 'Ders kodu ve adı gereklidir.' });
+  try {
+    const existing = await prisma.course.findUnique({ where: { ders_kodu } });
+    if (existing) return res.status(400).json({ error: 'Bu ders kodu zaten mevcut.' });
+    const course = await prisma.course.create({ data: { ders_kodu, ders_adi, aciklama: aciklama || '' } });
+    res.status(201).json(course);
+  } catch (err) { res.status(500).json({ error: 'Ders eklenemedi.' }); }
+});
+
+app.delete('/api/courses/:dersKodu', adminKontrol, async (req, res) => {
+  const { dersKodu } = req.params;
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
+  try {
+    await prisma.criterion.deleteMany({ where: { ders_kodu: dersKodu } });
+    await prisma.course.delete({ where: { ders_kodu: dersKodu } });
+    res.json({ message: 'Ders silindi.' });
+  } catch (err) { res.status(500).json({ error: 'Ders silinemedi.' }); }
+});
+
+// ─── KRİTERLER ───────────────────────────────────────────────────────────────
+
+app.get('/api/criteria/:dersKodu', async (req, res) => {
+  try {
+    const criteria = await prisma.criterion.findMany({ where: { ders_kodu: req.params.dersKodu }, orderBy: { id: 'asc' } });
+    res.json(criteria);
+  } catch (err) { res.status(500).json({ error: 'Kriterler yüklenemedi.' }); }
+});
+
+app.post('/api/criteria', adminKontrol, async (req, res) => {
+  const { kriter_adi, max_puan, ders_kodu } = req.body;
+  if (!hasCourseAccess(req.authorizedCourses, ders_kodu)) return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
+  try {
+    const criterion = await prisma.criterion.create({ data: { kriter_adi, max_puan: parseInt(max_puan) || 100, ders_kodu } });
+    res.json(criterion);
+  } catch (err) { res.status(500).json({ error: 'Kriter eklenemedi.' }); }
+});
+
+// ─── ÖDEV YÜKLEME ────────────────────────────────────────────────────────────
+
 app.post('/api/submissions', async (req, res) => {
   const { userId, video_url, ders_kodu, proje_aciklamasi } = req.body;
-
+  if (!userId || !video_url || !ders_kodu) return res.status(400).json({ error: 'UserId, video_url ve ders_kodu gereklidir.' });
   try {
-    const existing = await Submission.findOne({ where: { UserId: userId, ders_kodu } });
-    if (existing) {
-      return res.status(400).json({ error: "Bu ders için zaten bir video yüklediniz. Tekrar yükleyemezsiniz." });
-    }
-
-    if (!userId || !video_url || !ders_kodu) {
-      return res.status(400).json({ error: "UserId, video_url ve ders_kodu gereklidir." });
-    }
-
-    await Submission.create({ 
-      UserId: userId, 
-      video_url, 
-      ders_kodu,
-      proje_aciklamasi: proje_aciklamasi || ""
-    });
-    res.json({ message: "Videonuz başarıyla yüklendi!" });
-  } catch (error) {
-    console.error("Video yükleme hatası:", error);
-    res.status(500).json({ error: error.message || "Video yüklenirken hata oluştu." });
-  }
+    const existing = await prisma.submission.findFirst({ where: { userId: parseInt(userId), ders_kodu } });
+    if (existing) return res.status(400).json({ error: 'Bu ders için zaten bir video yüklediniz.' });
+    await prisma.submission.create({ data: { userId: parseInt(userId), video_url, ders_kodu, proje_aciklamasi: proje_aciklamasi || '' } });
+    res.json({ message: 'Videonuz başarıyla yüklendi!' });
+  } catch (err) { res.status(500).json({ error: 'Video yüklenirken hata oluştu.' }); }
 });
 
-// VİDEO ATAMA 
+// ─── VİDEO ATAMA ─────────────────────────────────────────────────────────────
+
 app.get('/api/assign-video/:userId/:dersKodu', async (req, res) => {
-  const { userId, dersKodu } = req.params;
+  const userId = parseInt(req.params.userId);
+  const { dersKodu } = req.params;
   try {
-    console.log(`🔍 Video atanıyor - UserId: ${userId}, Ders: ${dersKodu}`);
-
-    const evaluationLimit = await getEvaluationLimit(dersKodu);
-    const gradedIds = await getUserEvaluatedSubmissionIdsForCourse(userId, dersKodu);
-
-    if (gradedIds.length >= evaluationLimit) {
-      return res.status(403).json({
-        error: `Bu ders için en fazla ${evaluationLimit} video değerlendirebilirsiniz.`,
-        limitReached: true,
-        evaluationLimit
-      });
-    }
-
-    console.log(`⏭️ Önceden puanlanmış: ${gradedIds.length} video`);
-
-    const whereCondition = {
-      ders_kodu: dersKodu,
-      UserId: { [Op.ne]: parseInt(userId) }
-    };
-
-    if (gradedIds.length > 0) {
-      whereCondition.id = { [Op.notIn]: gradedIds };
-    }
-
-    const allEligible = await Submission.findAll({
-      where: whereCondition,
-      attributes: ['id', 'UserId', 'ders_kodu']
+    const limit = await getEvaluationLimit(dersKodu);
+    const gradedSubs = await prisma.grade.findMany({
+      where: { puan_veren_id: userId, submission: { ders_kodu: dersKodu } },
+      select: { submissionId: true },
+      distinct: ['submissionId'],
     });
-    console.log(`📹 Uygun submission sayısı: ${allEligible.length}`);
-
-    const submission = await pickRandomSubmissionForEvaluation(whereCondition);
-
-    if (!submission) {
-      console.log(`❌ Hiç video bulunamadı`);
-      return res.status(404).json({ error: 'Puanlanacak video kalmadı.' });
+    const gradedIds = gradedSubs.map(g => g.submissionId);
+    if (gradedIds.length >= limit) {
+      return res.status(403).json({ error: `Bu ders için en fazla ${limit} video değerlendirebilirsiniz.`, limitReached: true, evaluationLimit: limit });
     }
-    
-    console.log(`✅ Video bulundu - ID: ${submission.id}`);
-    res.json(submission);
-  } catch (error) {
-    console.error('🔴 Video atama hatası:', error.message);
-    res.status(500).json({ error: `Video atama hatası: ${error.message}` });
+    const eligible = await prisma.submission.findMany({
+      where: { ders_kodu: dersKodu, userId: { not: userId }, id: gradedIds.length ? { notIn: gradedIds } : undefined },
+      include: { user: { select: { ad_soyad: true, id: true } } },
+    });
+    if (!eligible.length) {
+      // Tüm videolar puanlanmışsa herhangi birini ver
+      const all = await prisma.submission.findMany({
+        where: { ders_kodu: dersKodu, userId: { not: userId } },
+        include: { user: { select: { ad_soyad: true, id: true } } },
+      });
+      if (!all.length) return res.status(404).json({ error: 'Puanlanacak video kalmadı.' });
+      return res.json(all[Math.floor(Math.random() * all.length)]);
+    }
+    res.json(eligible[Math.floor(Math.random() * eligible.length)]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Video atama hatası.' });
   }
 });
 
 app.get('/api/can-evaluate/:userId/:dersKodu', async (req, res) => {
   const { userId, dersKodu } = req.params;
-
-  const sub = await Submission.findOne({ where: { UserId: userId, ders_kodu: dersKodu } });
-  if (!sub) {
-    return res.json({ canEvaluate: false, message: "Başkalarını puanlayabilmek için önce kendi projenizi yüklemelisiniz!" });
-  }
+  const sub = await prisma.submission.findFirst({ where: { userId: parseInt(userId), ders_kodu: dersKodu } });
+  if (!sub) return res.json({ canEvaluate: false, message: 'Başkalarını puanlayabilmek için önce kendi projenizi yüklemelisiniz!' });
   res.json({ canEvaluate: true });
 });
 
 app.get('/api/check-submission-status', async (req, res) => {
   const { userId, dersKodu } = req.query;
+  const sub = await prisma.submission.findFirst({ where: { userId: parseInt(userId), ders_kodu: dersKodu } });
+  res.json({ hasUploaded: !!sub });
+});
 
+// ─── PUANLAMA ────────────────────────────────────────────────────────────────
+
+app.post('/api/grades', async (req, res) => {
+  const { submissionId, userId, scores, puanlananOgrenciId } = req.body;
   try {
-    const submission = await Submission.findOne({ 
-      where: { UserId: userId, ders_kodu: dersKodu } 
-    });
+    const submission = await prisma.submission.findUnique({ where: { id: parseInt(submissionId) } });
+    if (!submission) return res.status(404).json({ error: 'Submission bulunamadı.' });
+    if (!Array.isArray(scores) || !scores.length) return res.status(400).json({ error: 'En az bir kriter puanı gereklidir.' });
 
-    if (submission) {
-      res.json({ hasUploaded: true });
-    } else {
-      res.json({ hasUploaded: false });
+    const limit = await getEvaluationLimit(submission.ders_kodu);
+    const gradedSubs = await prisma.grade.findMany({
+      where: { puan_veren_id: parseInt(userId), submission: { ders_kodu: submission.ders_kodu } },
+      select: { submissionId: true }, distinct: ['submissionId'],
+    });
+    const alreadyGradedThisSub = await prisma.grade.findFirst({
+      where: { submissionId: parseInt(submissionId), puan_veren_id: parseInt(userId) },
+    });
+    if (gradedSubs.length >= limit && !alreadyGradedThisSub) {
+      return res.status(403).json({ error: `Bu ders için en fazla ${limit} video değerlendirebilirsiniz.` });
     }
-  } catch (error) {
-    res.status(500).json({ error: "Sunucu hatası" });
+
+    const criterionIds = [...new Set(scores.map(s => parseInt(s.criterionId)))];
+    const validCriteria = await prisma.criterion.findMany({
+      where: { id: { in: criterionIds }, ders_kodu: submission.ders_kodu },
+    });
+    if (validCriteria.length !== criterionIds.length) return res.status(400).json({ error: 'Geçersiz kriter puanı gönderildi.' });
+    const criterionMap = new Map(validCriteria.map(c => [c.id, c]));
+
+    for (const score of scores) {
+      const cId = parseInt(score.criterionId);
+      const puan = parseInt(score.puan);
+      const criterion = criterionMap.get(cId);
+      if (!criterion) throw new Error('Geçersiz kriter.');
+      if (!Number.isInteger(puan) || puan < criterion.min_puan || puan > criterion.max_puan) {
+        throw new Error(`${criterion.kriter_adi} için geçerli aralık: ${criterion.min_puan}–${criterion.max_puan}.`);
+      }
+      await prisma.grade.upsert({
+        where: { submissionId_puan_veren_id_criterionId: { submissionId: parseInt(submissionId), puan_veren_id: parseInt(userId), criterionId: cId } },
+        create: { submissionId: parseInt(submissionId), puan_veren_id: parseInt(userId), criterionId: cId, puan, puanlanan_ogrenci_id: parseInt(puanlananOgrenciId) },
+        update: { puan },
+      });
+    }
+    res.json({ message: 'Kaydedildi.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Hata.' });
   }
 });
 
-//  HOCA PANELİ - TÜM SUBMISSION'LAR
+// ─── HOCA PANELİ ─────────────────────────────────────────────────────────────
+
 app.get('/api/admin/submissions/:dersKodu', adminKontrol, async (req, res) => {
   const { dersKodu } = req.params;
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders bilgilerine erişemezsiniz.' });
   try {
-    if (!hasCourseAccess(req.authorizedCourses, dersKodu)) {
-      return res.status(403).json({ error: 'Bu ders bilgilerine erisemezsiniz.' });
-    }
-    const submissions = await Submission.findAll({
+    const subs = await prisma.submission.findMany({
       where: { ders_kodu: dersKodu },
-      attributes: [
-        'id', 'video_url', 'ders_kodu', 'proje_aciklamasi', 'UserId',
-        [sequelize.fn('AVG', sequelize.col('Grades.puan')), 'ortalama_puan']
-      ],
-      include: [
-        { model: User, attributes: ['ad_soyad', 'ogrenci_no'] },
-        { model: Grade, attributes: [] }
-      ],
-      group: ['Submission.id', 'User.id'],
-      subQuery: false,
+      include: { user: { select: { ad_soyad: true, ogrenci_no: true } }, grades: { select: { puan: true } } },
     });
-    res.json(submissions);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Veriler çekilemedi.' });
-  }
+    res.json(subs.map(s => ({
+      ...s,
+      User: { ad_soyad: s.user.ad_soyad, ogrenci_no: s.user.ogrenci_no },
+      ortalama_puan: s.grades.length ? s.grades.reduce((a, g) => a + g.puan, 0) / s.grades.length : null,
+    })));
+  } catch (err) { res.status(500).json({ error: 'Veriler çekilemedi.' }); }
 });
 
-// HOCA PANELİ - DETAYLI SUBMISSION BİLGİSİ
-app.get('/api/admin/submission-detail-legacy/:submissionId', adminKontrol, async (req, res) => {
-  const { submissionId } = req.params;
-  try {
-    const submission = await Submission.findByPk(submissionId, {
-      include: [
-        { 
-          model: User, 
-          attributes: ['id', 'ad_soyad', 'ogrenci_no']
-        },
-        {
-          model: Grade,
-          include: [
-            { model: Criterion, attributes: ['id', 'kriter_adi', 'max_puan'] },
-            { model: User, as: 'PuanVeren', attributes: ['id', 'ad_soyad', 'rol'] }
-          ]
-        }
-      ]
-    });
-    if (!submission) {
-      return res.status(404).json({ error: 'Submission bulunamadı.' });
-    }
-    const criterias = await Criterion.findAll({ where: { ders_kodu: submission?.ders_kodu } });
-
-    const hocaPuanlari = [];
-    const akranPuanlari = [];
-    const ogrenciVerdigiPuanlar = [];
-
-    if (submission.Grades) {
-      submission.Grades.forEach(grade => {
-        if (grade.PuanVeren?.rol === 'hoca') {
-          hocaPuanlari.push({
-            id: grade.id,
-            criterionId: grade.Criterion?.id,
-            puan: grade.puan,
-            kriter_adi: grade.Criterion?.kriter_adi,
-            max_puan: grade.Criterion?.max_puan
-          });
-        } 
-        else if (grade.puan_veren_id !== submission.UserId) {
-          akranPuanlari.push({
-            id: grade.id,
-            criterionId: grade.Criterion?.id,
-            puan: grade.puan,
-            kriter_adi: grade.Criterion?.kriter_adi,
-            veren: grade.PuanVeren?.ad_soyad
-          });
-        }
-        else if (grade.puan_veren_id === submission.UserId) {
-          ogrenciVerdigiPuanlar.push({
-            id: grade.id,
-            criterionId: grade.Criterion?.id,
-            puan: grade.puan,
-            kriter_adi: grade.Criterion?.kriter_adi,
-            puanlananOgrenci: 'Başka Öğrenci'
-          });
-        }
-      });
-    }
-    const hocaGenelPuani = calculateGeneralTeacherScore(hocaPuanlari);
-
-    const response = {
-      id: submission.id,
-      video_url: submission.video_url,
-      proje_aciklamasi: submission.proje_aciklamasi,
-      ders_kodu: submission.ders_kodu,
-      hoca_puani: hocaGenelPuani,
-      hoca_genel_puani: hocaGenelPuani,
-      criterias: criterias.map((criterion) => criterion.toJSON()),
-      student: {
-        id: submission.User.id,
-        ad_soyad: submission.User.ad_soyad,
-        ogrenci_no: submission.User.ogrenci_no
-      },
-      hocaPuanlari: hocaPuanlari,
-      akranPuanlari: akranPuanlari,
-      ogrenciVerdigiPuanlar: ogrenciVerdigiPuanlar
-    };
-
-    res.json(response);
-  } catch (error) {
-    console.error('Submission detay hatası:', error);
-    res.status(500).json({ error: 'Detay bilgisi çekilemedi.' });
-  }
-});
-
-// KRİTER EKLE VE GETİR
 app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, res) => {
-  const { submissionId } = req.params;
-
+  const subId = parseInt(req.params.submissionId);
   try {
-    const submission = await Submission.findByPk(submissionId, {
-      include: [
-        {
-          model: User,
-          attributes: ['id', 'ad_soyad', 'ogrenci_no']
+    const submission = await prisma.submission.findUnique({
+      where: { id: subId },
+      include: {
+        user: { select: { id: true, ad_soyad: true, ogrenci_no: true } },
+        grades: {
+          include: {
+            criterion: { select: { id: true, kriter_adi: true, max_puan: true } },
+            puanVeren: { select: { id: true, ad_soyad: true, rol: true } },
+          },
         },
-        {
-          model: Grade,
-          include: [
-            { model: Criterion, attributes: ['id', 'kriter_adi', 'max_puan'] },
-            { model: User, as: 'PuanVeren', attributes: ['id', 'ad_soyad', 'rol'] }
-          ]
-        }
-      ]
+      },
     });
-
-    if (!submission) {
-      return res.status(404).json({ error: 'Submission bulunamadi.' });
+    if (!submission) return res.status(404).json({ error: 'Submission bulunamadı.' });
+    // Admin ise tüm submission'lara erişebilir
+    if (!req.isAdmin && !hasCourseAccess(req.authorizedCourses, submission.ders_kodu)) {
+      return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
     }
 
-    if (!hasCourseAccess(req.authorizedCourses, submission.ders_kodu)) {
-      return res.status(403).json({ error: 'Bu ders bilgilerine erisemezsiniz.' });
+    const criterias = await prisma.criterion.findMany({ where: { ders_kodu: submission.ders_kodu } });
+    const hocaPuanlari = [], akranPuanlari = [], alinanHoca = [], alinanAkran = [], alinanTum = [];
+
+    for (const g of submission.grades) {
+      const kayit = { id: g.id, criterionId: g.criterion?.id, puan: g.puan, kriter_adi: g.criterion?.kriter_adi, max_puan: g.criterion?.max_puan, veren: g.puanVeren?.ad_soyad, verenRol: g.puanVeren?.rol || 'ogrenci' };
+      alinanTum.push(kayit);
+      if (g.puanVeren?.rol === 'hoca') { hocaPuanlari.push(kayit); alinanHoca.push(kayit); }
+      else { akranPuanlari.push(kayit); alinanAkran.push(kayit); }
     }
 
-    const criterias = await Criterion.findAll({ where: { ders_kodu: submission.ders_kodu } });
-
-    const hocaPuanlari = [];
-    const akranPuanlari = [];
-    const alinanHocaPuanlari = [];
-    const alinanAkranPuanlari = [];
-    const alinanTumPuanlar = [];
-
-    if (submission.Grades) {
-      submission.Grades.forEach((grade) => {
-        const ortakKayit = {
-          id: grade.id,
-          criterionId: grade.Criterion?.id,
-          puan: grade.puan,
-          kriter_adi: grade.Criterion?.kriter_adi,
-          max_puan: grade.Criterion?.max_puan,
-          veren: grade.PuanVeren?.ad_soyad || (grade.PuanVeren?.rol === 'hoca' ? 'Hoca' : 'Ogrenci'),
-          verenRol: grade.PuanVeren?.rol || 'ogrenci'
-        };
-
-        alinanTumPuanlar.push(ortakKayit);
-
-        if (grade.PuanVeren?.rol === 'hoca') {
-          hocaPuanlari.push(ortakKayit);
-          alinanHocaPuanlari.push(ortakKayit);
-        } else {
-          akranPuanlari.push(ortakKayit);
-          alinanAkranPuanlari.push(ortakKayit);
-        }
-      });
-    }
-    const hocaGenelPuani = calculateWeightedAverage(hocaPuanlari);
-
-    const verilenPuanKayitlari = await Grade.findAll({
-      where: { puan_veren_id: submission.UserId },
-      include: [
-        { model: Criterion, attributes: ['id', 'kriter_adi', 'max_puan'] },
-        {
-          model: Submission,
-          attributes: ['id', 'ders_kodu', 'UserId'],
-          where: { ders_kodu: submission.ders_kodu },
-          include: [{ model: User, attributes: ['id', 'ad_soyad', 'ogrenci_no'] }]
-        }
-      ],
-      order: [['createdAt', 'DESC']]
+    const verilenGrades = await prisma.grade.findMany({
+      where: { puan_veren_id: submission.userId, submission: { ders_kodu: submission.ders_kodu } },
+      include: { criterion: { select: { kriter_adi: true, max_puan: true } }, submission: { include: { user: { select: { ad_soyad: true, ogrenci_no: true } } } } },
     });
-
-    const ogrenciVerdigiPuanlar = verilenPuanKayitlari
-      .filter((grade) => grade.Submission && grade.Submission.UserId !== submission.UserId)
-      .map((grade) => ({
-        id: grade.id,
-        puan: grade.puan,
-        kriter_adi: grade.Criterion?.kriter_adi,
-        max_puan: grade.Criterion?.max_puan,
-        puanlananOgrenci: grade.Submission?.User?.ad_soyad || 'Bilinmiyor',
-        puanlananOgrenciNo: grade.Submission?.User?.ogrenci_no || '-',
-        submissionId: grade.SubmissionId
-      }));
-
-    const ortalamaHesapla = (liste) => {
-      if (!liste.length) return 0;
-      return liste.reduce((sum, item) => sum + Number(item.puan || 0), 0) / liste.length;
-    };
+    const ogrenciVerdigiPuanlar = verilenGrades
+      .filter(g => g.submission?.userId !== submission.userId)
+      .map(g => ({ id: g.id, puan: g.puan, kriter_adi: g.criterion?.kriter_adi, max_puan: g.criterion?.max_puan, puanlananOgrenci: g.submission?.user?.ad_soyad, puanlananOgrenciNo: g.submission?.user?.ogrenci_no, submissionId: g.submissionId }));
 
     res.json({
-      id: submission.id,
-      video_url: submission.video_url,
-      proje_aciklamasi: submission.proje_aciklamasi,
-      ders_kodu: submission.ders_kodu,
-      hoca_puani: hocaGenelPuani,
-      hoca_genel_puani: hocaGenelPuani,
-      criterias: criterias.map((criterion) => criterion.toJSON()),
-      student: {
-        id: submission.User.id,
-        ad_soyad: submission.User.ad_soyad,
-        ogrenci_no: submission.User.ogrenci_no
-      },
-      hocaPuanlari,
-      akranPuanlari,
-      alinanHocaPuanlari,
-      alinanAkranPuanlari,
-      alinanTumPuanlar,
-      ogrenciVerdigiPuanlar,
+      id: submission.id, video_url: submission.video_url, proje_aciklamasi: submission.proje_aciklamasi, ders_kodu: submission.ders_kodu,
+      hoca_genel_puani: weightedAvg(alinanHoca.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+      criterias,
+      student: submission.user,
+      hocaPuanlari, akranPuanlari, alinanHocaPuanlari: alinanHoca, alinanAkranPuanlari: alinanAkran, alinanTumPuanlar: alinanTum, ogrenciVerdigiPuanlar,
       istatistikler: {
-        hocaOrtalamasi: hocaGenelPuani,
-        hocaGenelPuani,
-        alinanHocaOrtalamasi: calculateWeightedAverage(alinanHocaPuanlari),
-        alinanAkranOrtalamasi: calculateWeightedAverage(alinanAkranPuanlari),
-        alinanGenelOrtalama: calculateWeightedAverage(alinanTumPuanlar),
-        verdigiOrtalama: calculateWeightedAverage(ogrenciVerdigiPuanlar)
-      }
+        hocaGenelPuani: weightedAvg(alinanHoca.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+        alinanHocaOrtalamasi: weightedAvg(alinanHoca.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+        alinanAkranOrtalamasi: weightedAvg(alinanAkran.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+        alinanGenelOrtalama: weightedAvg(alinanTum.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+        verdigiOrtalama: weightedAvg(ogrenciVerdigiPuanlar.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+      },
     });
-  } catch (error) {
-    console.error('Submission detay hatasi:', error);
-    res.status(500).json({ error: 'Detay bilgisi cekilemedi.' });
-  }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Detay bilgisi çekilemedi.' }); }
 });
 
-app.get('/api/criteria/:dersKodu', async (req, res) => {
-  const criteria = await Criterion.findAll({ where: { ders_kodu: req.params.dersKodu } });
-  res.json(criteria);
-});
-
-// KRİTER EKLE  
-app.post('/api/criteria', adminKontrol, async (req, res) => {
-  if (!hasCourseAccess(req.authorizedCourses, req.body?.ders_kodu)) {
-    return res.status(403).json({ error: 'Bu ders icin yetkiniz yok.' });
-  }
-  const newCriterion = await Criterion.create(req.body);
-  res.json(newCriterion);
-});
-
-// PUANLARI KAYDET
-app.post('/api/grades', async (req, res) => {
-  const { submissionId, userId, scores, puanlananOgrenciId } = req.body; 
+app.post('/api/admin/grade-submission', adminKontrol, async (req, res) => {
+  const { submissionId, puan } = req.body;
   try {
-    const submission = await Submission.findByPk(submissionId);
-
-    if (!submission) {
-      return res.status(404).json({ error: 'Submission bulunamadı.' });
-    }
-
-    if (!Array.isArray(scores) || scores.length === 0) {
-      return res.status(400).json({ error: 'En az bir kriter puanı gereklidir.' });
-    }
-
-    const evaluationLimit = await getEvaluationLimit(submission.ders_kodu);
-    const gradedIds = await getUserEvaluatedSubmissionIdsForCourse(userId, submission.ders_kodu);
-    const existingSubmissionGrade = await Grade.findOne({
-      where: {
-        SubmissionId: submissionId,
-        puan_veren_id: userId
-      }
-    });
-
-    if (gradedIds.length >= evaluationLimit && !existingSubmissionGrade) {
-      return res.status(403).json({ error: `Bu ders için en fazla ${evaluationLimit} video değerlendirebilirsiniz.` });
-    }
-
-    const requestedCriterionIds = [...new Set(scores.map((score) => Number(score.criterionId)).filter(Boolean))];
-    const validCriteria = await Criterion.findAll({
-      where: {
-        id: requestedCriterionIds,
-        ders_kodu: submission.ders_kodu
-      }
-    });
-
-    if (validCriteria.length !== requestedCriterionIds.length) {
-      return res.status(400).json({ error: 'Geçersiz kriter puanı gönderildi.' });
-    }
-
-    const criterionMap = new Map(validCriteria.map((criterion) => [criterion.id, criterion]));
-
-    const gradePromises = scores.map(async (score) => {
-      const criterionId = Number(score.criterionId);
-      const puan = Number(score.puan);
-      const criterion = criterionMap.get(criterionId);
-
-      if (!criterion) {
-        throw new Error('Geçersiz kriter bulundu.');
-      }
-
-      if (!Number.isFinite(puan) || !Number.isInteger(puan)) {
-        throw new Error('Puanlar tam sayı olmalıdır.');
-      }
-
-      if (puan < criterion.min_puan || puan > criterion.max_puan) {
-        throw new Error(`${criterion.kriter_adi} kriteri için geçerli aralık ${criterion.min_puan}-${criterion.max_puan}.`);
-      }
-
-      const [grade, created] = await Grade.findOrCreate({
-        where: {
-          SubmissionId: submissionId,
-          puan_veren_id: userId,
-          CriterionId: criterionId
-        },
-        defaults: {
-          puan,
-          SubmissionId: submissionId,
-          puan_veren_id: userId,
-          puanlanan_ogrenci_id: puanlananOgrenciId,
-          CriterionId: criterionId
-        }
-      });
-
-      if (!created) {
-        await grade.update({
-          puan,
-          puanlanan_ogrenci_id: puanlananOgrenciId
-        });
-      }
-    });
-
-    await Promise.all(gradePromises);
-    res.json({ message: 'Kaydedildi.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message || 'Hata.' });
-  }
+    const sub = await prisma.submission.findUnique({ where: { id: parseInt(submissionId) } });
+    if (!sub) return res.status(404).json({ error: 'Submission bulunamadı.' });
+    if (!hasCourseAccess(req.authorizedCourses, sub.ders_kodu)) return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
+    await prisma.submission.update({ where: { id: parseInt(submissionId) }, data: { hoca_puani: parseInt(puan) } });
+    res.json({ message: 'Hoca puanı kaydedildi.' });
+  } catch (err) { res.status(500).json({ error: 'Hata.' }); }
 });
-// TÜM ÖĞRENCİLERİN DURUMUNU GETİR (Admin Paneli için)
+
 app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, res) => {
   const { dersKodu } = req.params;
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders bilgilerine erişemezsiniz.' });
   try {
-    if (!hasCourseAccess(req.authorizedCourses, dersKodu)) {
-      return res.status(403).json({ error: 'Bu ders bilgilerine erisemezsiniz.' });
-    }
-    const students = await AllowedStudent.findAll({
-      where: {
-        dersler: { [Op.like]: `%${dersKodu}%` }
-      },
-      include: [
-        { 
-          model: User, 
-          as: 'RegisteredUser',
-          include: [{ model: Submission, where: { ders_kodu: dersKodu }, required: false }]
-        }
-      ]
+    const allowedAll = await prisma.allowedStudent.findMany({ where: { dersler: { contains: dersKodu } } });
+    const allowed = allowedAll.filter(s => parseDersler(s.dersler).includes(dersKodu));
+    const nos = allowed.map(s => s.ogrenci_no);
+    const users = await prisma.user.findMany({ where: { ogrenci_no: { in: nos } } });
+    const userMap = new Map(users.map(u => [u.ogrenci_no, u]));
+    const userIds = users.map(u => u.id);
+    const submissions = await prisma.submission.findMany({ where: { userId: { in: userIds }, ders_kodu: dersKodu } });
+    const subMap = new Map(submissions.map(s => [s.userId, s]));
+    const subIds = submissions.map(s => s.id);
+
+    const grades = subIds.length ? await prisma.grade.findMany({
+      where: { submissionId: { in: subIds } },
+      include: { criterion: { select: { max_puan: true } }, puanVeren: { select: { rol: true } } },
+    }) : [];
+
+    const givenGrades = userIds.length ? await prisma.grade.findMany({
+      where: { puan_veren_id: { in: userIds }, submission: { ders_kodu: dersKodu } },
+      include: { submission: { select: { userId: true } }, criterion: { select: { max_puan: true } } },
+    }) : [];
+
+    const receivedBySubId = {};
+    const hocaBySubId = {};
+    grades.forEach(g => {
+      const k = g.submissionId;
+      if (!receivedBySubId[k]) receivedBySubId[k] = [];
+      receivedBySubId[k].push(g);
+      if (g.puanVeren?.rol === 'hoca') {
+        if (!hocaBySubId[k]) hocaBySubId[k] = [];
+        hocaBySubId[k].push(g);
+      }
     });
 
-    const submissions = students
-      .map((student) => student.RegisteredUser?.Submissions?.[0])
-      .filter(Boolean);
+    const givenByUserId = {};
+    givenGrades.filter(g => g.submission?.userId !== g.puan_veren_id).forEach(g => {
+      const k = g.puan_veren_id;
+      if (!givenByUserId[k]) givenByUserId[k] = [];
+      givenByUserId[k].push(g);
+    });
 
-    const submissionIds = submissions.map((submission) => submission.id);
-    const userIds = students
-      .map((student) => student.RegisteredUser?.id)
-      .filter(Boolean);
-
-    const [receivedGrades, teacherGrades, givenGrades] = await Promise.all([
-      submissionIds.length
-        ? Grade.findAll({
-            where: { SubmissionId: { [Op.in]: submissionIds } },
-            attributes: ['SubmissionId', 'puan'],
-            include: [{
-              model: Criterion,
-              attributes: ['max_puan']
-            }]
-          })
-        : [],
-      submissionIds.length
-        ? Grade.findAll({
-            where: { SubmissionId: { [Op.in]: submissionIds } },
-            attributes: ['SubmissionId', 'puan'],
-            include: [{
-              model: Criterion,
-              attributes: ['max_puan'],
-            }, {
-              model: User,
-              as: 'PuanVeren',
-              attributes: ['rol']
-            }]
-          })
-        : [],
-      userIds.length
-        ? Grade.findAll({
-            where: { puan_veren_id: { [Op.in]: userIds } },
-            attributes: ['puan_veren_id', 'puan'],
-            include: [{
-              model: Submission,
-              attributes: ['UserId'],
-              where: { ders_kodu: dersKodu }
-          }]
-        })
-        : []
-    ]);
-
-    const teacherGradeGroups = teacherGrades.reduce((acc, grade) => {
-      if (grade.PuanVeren?.rol !== 'hoca') {
-        return acc;
-      }
-
-      const key = grade.SubmissionId;
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-
-      acc[key].push({
-        puan: grade.puan,
-        max_puan: grade.Criterion?.max_puan
-      });
-      return acc;
-    }, {});
-
-    const teacherStats = Object.fromEntries(
-      Object.entries(teacherGradeGroups).map(([submissionId, grades]) => [
-        submissionId,
-        calculateGeneralTeacherScore(grades)
-      ])
-    );
-
-    const receivedStats = receivedGrades.reduce((acc, grade) => {
-      const key = grade.SubmissionId;
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push({
-        puan: grade.puan,
-        max_puan: grade.Criterion?.max_puan
-      });
-      return acc;
-    }, {});
-
-    const givenStats = givenGrades.reduce((acc, grade) => {
-      if (grade.Submission?.UserId === grade.puan_veren_id) {
-        return acc;
-      }
-
-      const key = grade.puan_veren_id;
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push({
-        puan: grade.puan,
-        max_puan: grade.Criterion?.max_puan
-      });
-      return acc;
-    }, {});
-
-    const enrichedStudents = students.map((student) => {
-      const registeredUser = student.RegisteredUser;
-      const submission = registeredUser?.Submissions?.[0];
-      const received = submission ? receivedStats[submission.id] : null;
-      const given = registeredUser ? givenStats[registeredUser.id] : null;
-
+    const result = allowed.map(s => {
+      const user = userMap.get(s.ogrenci_no);
+      const sub = user ? subMap.get(user.id) : null;
+      // sifre hash'ini response'a dahil etme
+      const safeUser = user ? (({ sifre, ...rest }) => rest)(user) : null;
       return {
-        ...student.toJSON(),
-        alinan_ortalama: received ? calculateWeightedAverage(received) : null,
-        verdigi_ortalama: given ? calculateWeightedAverage(given) : null,
-        hoca_puani: submission ? (teacherStats[submission.id] ?? null) : null,
-        hoca_genel_puani: submission ? (teacherStats[submission.id] ?? null) : null
+        ...s,
+        RegisteredUser: safeUser ? { ...safeUser, Submissions: sub ? [sub] : [] } : null,
+        alinan_ortalama: sub ? weightedAvg((receivedBySubId[sub.id] || []).map(g => ({ puan: g.puan, criterion: g.criterion }))) : null,
+        verdigi_ortalama: user ? weightedAvg((givenByUserId[user.id] || []).map(g => ({ puan: g.puan, criterion: g.criterion }))) : null,
+        hoca_genel_puani: sub ? weightedAvg((hocaBySubId[sub.id] || []).map(g => ({ puan: g.puan, criterion: g.criterion }))) : null,
       };
     });
-
-    res.json(enrichedStudents);
-  } catch (error) {
-    res.status(500).json({ error: 'Liste çekilirken hata oluştu.' });
-  }
+    res.json(result);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Liste çekilirken hata oluştu.' }); }
 });
 
-// --- DERS YÖNETİMİ API'LAR ---
-// TÜM DERSLERİ GETİR
-app.get('/api/courses', async (req, res) => {
-  try {
-    const courses = await Course.findAll();
-    res.json(courses);
-  } catch (error) {
-    console.error('Dersler çekme hatası:', error);
-    res.status(500).json({ error: 'Dersler çekilemedi.' });
-  }
-});
+// ─── HOCA YÖNETİMİ ───────────────────────────────────────────────────────────
 
-// YENİ DERS EKLE (Admin)
-app.post('/api/courses', adminKontrol, async (req, res) => {
-  const { ders_kodu, ders_adi, aciklama } = req.body;
-
-  if (!ders_kodu || !ders_adi) {
-    return res.status(400).json({ error: 'Ders kodu ve adı gereklidir.' });
-  }
-
-  try {
-    const existing = await Course.findOne({ where: { ders_kodu } });
-    if (existing) {
-      return res.status(400).json({ error: 'Bu ders kodu zaten mevcut.' });
-    }
-
-    const newCourse = await Course.create({
-      ders_kodu,
-      ders_adi,
-      aciklama: aciklama || ''
-    });
-
-    console.log(`✅ Yeni ders eklendi: ${ders_adi} (${ders_kodu})`);
-    res.status(201).json(newCourse);
-  } catch (error) {
-    console.error('Ders ekleme hatası:', error);
-    res.status(500).json({ error: 'Ders eklenemedi.' });
-  }
-});
-
-// DERSI SİL (Admin)
-app.delete('/api/courses/:dersKodu', adminKontrol, async (req, res) => {
-  const { dersKodu } = req.params;
-
-  try {
-    if (!hasCourseAccess(req.authorizedCourses, dersKodu)) {
-      return res.status(403).json({ error: 'Bu ders icin yetkiniz yok.' });
-    }
-
-    const course = await Course.findOne({ where: { ders_kodu: dersKodu } });
-    if (!course) {
-      return res.status(404).json({ error: 'Ders bulunamadı.' });
-    }
-
-    await Criterion.destroy({ where: { ders_kodu: dersKodu } });
-
-    await course.destroy();
-
-    console.log(`🗑️ Ders silindi: ${dersKodu}`);
-    res.json({ message: 'Ders başarıyla silindi.' });
-  } catch (error) {
-    console.error('Ders silme hatası:', error);
-    res.status(500).json({ error: 'Ders silinemedi.' });
-  }
-});
-
-// --- HOCA YETKİLENDİRME API'LARI ---
 app.get('/api/admin/instructors', adminKontrol, async (req, res) => {
   try {
-    const instructors = await User.findAll({ where: { rol: 'hoca' }, attributes: ['id', 'ogrenci_no', 'ad_soyad', 'authorized_course'] });
-    res.json(instructors.map((inst) => ({
-      id: inst.id,
-      ogrenci_no: inst.ogrenci_no,
-      ad_soyad: inst.ad_soyad,
-      authorized_course: inst.authorized_course,
-      authorized_courses: parseCourseList(inst.authorized_course)
-    })));
-  } catch (error) {
-    console.error('Hocalar çekilemedi:', error);
-    res.status(500).json({ error: 'Hocalar çekilemedi.' });
-  }
+    const instructors = await prisma.user.findMany({ where: { rol: 'hoca' }, select: { id: true, ogrenci_no: true, ad_soyad: true, authorized_course: true } });
+    res.json(instructors.map(i => ({ ...i, authorized_courses: parseDersler(i.authorized_course) })));
+  } catch (err) { res.status(500).json({ error: 'Hocalar çekilemedi.' }); }
 });
 
 app.post('/api/admin/instructors', adminKontrol, async (req, res) => {
-  const { ogrenci_no, ad_soyad, sifre } = req.body;
-  const authorizedCourses = parseCourseList(req.body.authorized_courses || req.body.authorized_course);
-
-  if (!ogrenci_no || !ad_soyad || !sifre || authorizedCourses.length === 0) {
-    return res.status(400).json({ error: 'Tüm alanlar zorunludur: numara, ad soyad, şifre, yetkili ders.' });
-  }
-
+  const { ogrenci_no, ad_soyad, sifre, authorized_courses } = req.body;
+  const dersler = parseDersler(req.body.authorized_courses || req.body.authorized_course);
+  if (!ogrenci_no || !ad_soyad || !sifre || !dersler.length) return res.status(400).json({ error: 'Tüm alanlar zorunludur.' });
   try {
-    const existing = await User.findOne({ where: { ogrenci_no } });
-    if (existing) {
-      return res.status(400).json({ error: 'Bu numarada bir kullanıcı zaten mevcut.' });
-    }
-
-    const courseCount = await Course.count({ where: { ders_kodu: { [Op.in]: authorizedCourses } } });
-    if (courseCount !== authorizedCourses.length) {
-      return res.status(400).json({ error: 'Seçilen ders mevcut değil.' });
-    }
-
-    const newInstructor = await User.create({
-      ogrenci_no,
-      ad_soyad,
-      sifre,
-      rol: 'hoca',
-      authorized_course: authorizedCourses.join(',')
-    });
-
-    res.status(201).json({
-      id: newInstructor.id,
-      ogrenci_no,
-      ad_soyad,
-      authorized_course: newInstructor.authorized_course,
-      authorized_courses: authorizedCourses
-    });
-  } catch (error) {
-    console.error('Hoca ekleme hatası:', error);
-    res.status(500).json({ error: 'Hoca eklenemedi.' });
-  }
+    const existing = await prisma.user.findUnique({ where: { ogrenci_no } });
+    if (existing) return res.status(400).json({ error: 'Bu numarada kullanıcı zaten mevcut.' });
+    const validCourses = await prisma.course.count({ where: { ders_kodu: { in: dersler } } });
+    if (validCourses !== dersler.length) return res.status(400).json({ error: 'Seçilen ders mevcut değil.' });
+    const hashedSifre = await hashPassword(sifre);
+    const hoca = await prisma.user.create({ data: { ogrenci_no, ad_soyad, sifre: hashedSifre, rol: 'hoca', authorized_course: dersler.join(',') } });
+    res.status(201).json({ id: hoca.id, ogrenci_no, ad_soyad, authorized_course: hoca.authorized_course, authorized_courses: dersler });
+  } catch (err) { res.status(500).json({ error: 'Hoca eklenemedi.' }); }
 });
 
 app.delete('/api/admin/instructors/:id', adminKontrol, async (req, res) => {
-  const { id } = req.params;
-
+  if (!req.isAdmin) return res.status(403).json({ error: 'Hoca silme yetkisi sadece admin hocadadır.' });
   try {
-    if (!req.isAdmin) {
-      return res.status(403).json({ error: 'Hoca silme yetkisi sadece admin hocadadir.' });
-    }
-    const instructor = await User.findOne({ where: { id, rol: 'hoca' } });
-    if (!instructor) {
-      return res.status(404).json({ error: 'Hoca bulunamadı.' });
-    }
-
-    await instructor.destroy();
+    const hoca = await prisma.user.findFirst({ where: { id: parseInt(req.params.id), rol: 'hoca' } });
+    if (!hoca) return res.status(404).json({ error: 'Hoca bulunamadı.' });
+    await prisma.user.delete({ where: { id: hoca.id } });
     res.json({ message: 'Hoca silindi.' });
-  } catch (error) {
-    console.error('Hoca silme hatası:', error);
-    res.status(500).json({ error: 'Hoca silinemedi.' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Hoca silinemedi.' }); }
 });
 
+// ─── AYARLAR ─────────────────────────────────────────────────────────────────
+
 app.get('/api/settings/video_limit', adminKontrol, async (req, res) => {
-  try {
-    const dersKodu = String(req.query?.dersKodu || '').trim();
-
-    if (!dersKodu) {
-      return res.status(400).json({ error: 'dersKodu zorunludur.' });
-    }
-
-    if (!hasCourseAccess(req.authorizedCourses, dersKodu)) {
-      return res.status(403).json({ error: 'Bu ders ayarina erisemezsiniz.' });
-    }
-
-    const setting = await Settings.findOne({ where: { key: getVideoLimitKey(dersKodu) } });
-
-    if (!setting) {
-      return res.json({ value: '3' });
-    }
-
-    res.json({ value: setting.value });
-  } catch (err) {
-    console.error('Limit okuma hatası:', err);
-    res.status(500).json({ error: "Veritabanı hatası!" });
-  }
+  const dersKodu = String(req.query.dersKodu || '').trim();
+  if (!dersKodu) return res.status(400).json({ error: 'dersKodu zorunludur.' });
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders ayarına erişemezsiniz.' });
+  const setting = await prisma.setting.findUnique({ where: { key: getVideoLimitKey(dersKodu) } });
+  res.json({ value: setting?.value ?? '3' });
 });
 
 app.post('/api/settings/update-limit', adminKontrol, async (req, res) => {
-  const parsedLimit = Number(req.body?.limit);
+  const limit = Number(req.body?.limit);
   const dersKodu = String(req.body?.dersKodu || '').trim();
+  if (!Number.isInteger(limit) || limit <= 0) return res.status(400).json({ error: 'Geçerli bir limit değeri gönderin.' });
+  if (!dersKodu) return res.status(400).json({ error: 'dersKodu zorunludur.' });
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders ayarını güncelleyemezsiniz.' });
+  const key = getVideoLimitKey(dersKodu);
+  await prisma.setting.upsert({ where: { key }, create: { key, value: String(limit) }, update: { value: String(limit) } });
+  res.json({ success: true, message: 'Limit başarıyla güncellendi!' });
+});
 
-  if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
-    return res.status(400).json({ error: "Geçerli bir limit değeri gönderin." });
-  }
+// ─── Başlat ───────────────────────────────────────────────────────────────────
 
-  if (!dersKodu) {
-    return res.status(400).json({ error: 'dersKodu zorunludur.' });
-  }
+const PORT = process.env.PORT || 5002;
 
-  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) {
-    return res.status(403).json({ error: 'Bu ders ayarini guncelleyemezsiniz.' });
-  }
-
+const startServer = async () => {
   try {
-    await Settings.upsert({
-      key: getVideoLimitKey(dersKodu),
-      value: String(parsedLimit)
-    });
-
-    res.json({ success: true, message: "Limit başarıyla güncellendi!" });
+    await connectDB();
+    await sequelize.sync({alter: true});
+    app.listen(PORT, () => console.log(`📡 Sunucu çalışıyor: ${PORT}`));
   } catch (err) {
-    console.error('Limit güncelleme hatası:', err);
-    res.status(500).json({ error: "Veritabanı hatası!" });
+    console.error('Sunucu başlatılamadı:', err);
+    process.exit(1);
   }
-});
+};
 
-const PORT = 5000;
-connectDB();
-sequelize.sync({ alter: true }).then(async () => { 
-  app.listen(PORT, () => console.log(`📡 Sunucu çalışıyor: ${PORT}`));
-});
+startServer();

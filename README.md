@@ -50,6 +50,7 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=odev_portali
 ```
+.env.example dosyasını şablon olarak kullanabilirsiniz. 
 
 Backend varsayılan olarak `5000` portunda çalışır.
 

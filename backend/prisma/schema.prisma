@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                Int          @id @default(autoincrement())
+  ogrenci_no        String       @unique
+  ad_soyad          String
+  sifre             String
+  rol               UserRole     @default(ogrenci)
+  is_admin          Boolean      @default(false)
+  authorized_course String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  submissions       Submission[]
+  givenGrades       Grade[]      @relation("PuanVeren")
+
+  @@map("users")
+}
+
+enum UserRole {
+  ogrenci
+  hoca
+}
+
+model Course {
+  id        Int      @id @default(autoincrement())
+  ders_kodu String   @unique
+  ders_adi  String
+  aciklama  String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("courses")
+}
+
+model Submission {
+  id               Int      @id @default(autoincrement())
+  ders_kodu        String
+  video_url        String
+  proje_aciklamasi String?  @db.Text
+  hoca_puani       Int?
+  userId           Int
+  user             User     @relation(fields: [userId], references: [id])
+  grades           Grade[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("submissions")
+}
+
+model Criterion {
+  id         Int      @id @default(autoincrement())
+  kriter_adi String
+  min_puan   Int      @default(0)
+  max_puan   Int      @default(100)
+  ders_kodu  String
+  grades     Grade[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("criteria")
+}
+
+model Grade {
+  id                   Int        @id @default(autoincrement())
+  puan                 Int
+  puan_veren_id        Int
+  puanlanan_ogrenci_id Int
+  submissionId         Int
+  criterionId          Int
+  submission           Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  criterion            Criterion  @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  puanVeren            User       @relation("PuanVeren", fields: [puan_veren_id], references: [id])
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  @@unique([submissionId, puan_veren_id, criterionId])
+  @@map("grades")
+}
+
+model AllowedStudent {
+  id         Int      @id @default(autoincrement())
+  ogrenci_no String   @unique
+  ad_soyad   String?
+  dersler    String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("allowed_students")
+}
+
+model Setting {
+  id    Int     @id @default(autoincrement())
+  key   String  @unique
+  value String?
+
+  @@map("settings")
+}

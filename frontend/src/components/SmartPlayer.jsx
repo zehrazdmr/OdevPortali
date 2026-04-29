@@ -1,75 +1,83 @@
 import React, { useState, useRef, useEffect } from 'react';
 import YouTube from 'react-youtube';
 
-const SmartPlayer = ({ videoUrl, onWatchComplete }) => {
-  const [canSubmit, setCanSubmit] = useState(false);
-  const playerRef = useRef(null);
-  const lastTime = useRef(0);
-
-  //Youtube linkinden video ID'sini çıkaran fonksiyon
 const getYouTubeId = (url) => {
   if (!url) return null;
-  
-  const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-  const match = url.match(regExp);
-  return (match && match[7].length === 11) ? match[7] : null;
+  const match = url.match(/(?:youtu\.be\/|watch\?v=|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
 };
-  console.log("Gelen Video URL:", videoUrl);
 
+export default function SmartPlayer({ videoUrl, onWatchComplete }) {
+  const [canSubmit, setCanSubmit] = useState(false);
+  const playerRef = useRef(null);
+  const lastTimeRef = useRef(0);
+  const intervalRef = useRef(null);
 
   const videoId = getYouTubeId(videoUrl);
 
-
-
   useEffect(() => {
-    const handleVisibilityChange = () => {
+    const handleVisibility = () => {
       if (document.hidden && playerRef.current) {
-        playerRef.current.pauseVideo(); 
+        playerRef.current.pauseVideo();
       }
     };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, []);
-    
+
   if (!videoId) {
-    return <p style={{ color: 'red' }}>⚠️ Geçersiz veya eksik YouTube linki!</p>;
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-600">
+        ⚠️ Geçersiz veya eksik YouTube linki!
+      </div>
+    );
   }
 
   const onStateChange = (event) => {
-    const player = event.target;
-    
-    const interval = setInterval(async () => {
-      if (player.getPlayerState() !== 1) return; 
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (event.data !== 1) return; // sadece oynarken izle
 
-      const currentTime = await player.getCurrentTime();
-      const duration = await player.getDuration();
+    intervalRef.current = setInterval(async () => {
+      if (!playerRef.current) return;
+      try {
+        const currentTime = await playerRef.current.getCurrentTime();
+        const duration = await playerRef.current.getDuration();
 
-      if (currentTime > lastTime.current + 2.5) {
-        player.seekTo(lastTime.current);
-      } else {
-        lastTime.current = currentTime;
-      }
+        // İleri sarma engeli
+        if (currentTime > lastTimeRef.current + 3) {
+          playerRef.current.seekTo(lastTimeRef.current);
+        } else {
+          lastTimeRef.current = currentTime;
+        }
 
-  
-      if (currentTime / duration > 0.9) {
-        setCanSubmit(true);
-        onWatchComplete(true); 
-        clearInterval(interval);
-      }
+        if (duration > 0 && currentTime / duration > 0.9 && !canSubmit) {
+          setCanSubmit(true);
+          onWatchComplete(true);
+          clearInterval(intervalRef.current);
+        }
+      } catch {}
     }, 1000);
   };
 
   return (
     <div>
-      <YouTube 
-        videoId={videoId} 
-        onStateChange={onStateChange}
-        onReady={(e) => playerRef.current = e.target}
-        opts={{ playerVars: { controls: 1, disablekb: 1 } }} 
-      />
-      {!canSubmit && <p style={{color: 'red'}}>⚠️ Puan vermek için videoyu izlemelisiniz.</p>}
+      <div className="rounded-xl overflow-hidden aspect-video bg-black">
+        <YouTube
+          videoId={videoId}
+          opts={{ width: '100%', height: '100%', playerVars: { controls: 1, disablekb: 1, rel: 0 } }}
+          className="w-full h-full"
+          onReady={e => { playerRef.current = e.target; }}
+          onStateChange={onStateChange}
+        />
+      </div>
+      {!canSubmit && (
+        <p className="text-xs text-gray-400 mt-2 text-center">
+          İleri sarma devre dışı — videoyu sonuna kadar izlemeniz gerekiyor.
+        </p>
+      )}
     </div>
   );
-};
-
-export default SmartPlayer;
+}
