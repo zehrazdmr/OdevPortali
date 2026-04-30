@@ -25,4 +25,4 @@ const verifyPassword = async (plain, stored) => {
 const needsRehash = (stored) =>
   typeof stored === 'string' && !stored.startsWith(`${PREFIX}$`);
 
-module.exports = { hashPassword, verifyPassword, needsRehash };
+module.exports = { hashPassword, verifyPassword, needsPasswordRehash };
