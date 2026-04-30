@@ -674,7 +674,10 @@ const PORT = process.env.PORT || 5002;
 const startServer = async () => {
   try {
     await connectDB();
-    await sequelize.sync({ alter: true });
+    // Production'da alter açık kalırsa Sequelize mevcut kolonları tekrar eklemeye çalışıp
+    // "Duplicate column name" hatası verebiliyor. Bu yüzden alter'i sadece açıkça istenirse kullan.
+    const shouldAlterSchema = process.env.SYNC_ALTER === 'true' && process.env.NODE_ENV !== 'production';
+    await sequelize.sync(shouldAlterSchema ? { alter: true } : {});
     app.listen(PORT, () => console.log(`📡 Sunucu çalışıyor: ${PORT}`));
   } catch (err) {
     console.error('Sunucu başlatılamadı:', err);
