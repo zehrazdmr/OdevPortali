@@ -12,7 +12,7 @@ const {
   Settings,
   Course,
 } = require('./models');
-const { hashPassword, verifyPassword, needsRehash } = require('./src/auth');
+const { hashPassword, verifyPassword, needsPasswordRehash } = require('./src/auth');
 
 const app = express();
 app.use(cors());
@@ -124,7 +124,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Hatalı kullanıcı adı veya şifre!' });
     }
 
-    if (needsRehash(user.sifre)) {
+    if (needsPasswordRehash(user.sifre)) {
       await user.update({ sifre: await hashPassword(sifre) });
     }
 
