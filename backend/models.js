@@ -47,6 +47,8 @@ const User = sequelize.define('User', {
   is_admin: { type: DataTypes.BOOLEAN, defaultValue: false },
   authorized_course: { type: DataTypes.STRING, allowNull: true }
 }, {
+  tableName: 'users',
+  freezeTableName: true,
   hooks: {
     beforeCreate: async (user) => {
       if (user.sifre && needsPasswordRehash(user.sifre)) {
@@ -66,10 +68,17 @@ const Course = sequelize.define('Course', {
   ders_kodu: { type: DataTypes.STRING, unique: true, allowNull: false },
   ders_adi: { type: DataTypes.STRING, allowNull: false },
   aciklama: { type: DataTypes.TEXT }
+}, {
+  tableName: 'courses',
+  freezeTableName: true
 });
 
 // 3. ÖDEV / VİDEO
 const Submission = sequelize.define('Submission', {
+  userId: {
+    type: DataTypes.INTEGER,
+    allowNull: false
+  },
   ders_kodu: { 
     type: DataTypes.STRING, 
     allowNull: false 
@@ -90,6 +99,9 @@ const Submission = sequelize.define('Submission', {
       max: 100
     }
   }
+}, {
+  tableName: 'submissions',
+  freezeTableName: true
 });
 
 
@@ -99,6 +111,9 @@ const Criterion = sequelize.define('Criterion', {
   min_puan: { type: DataTypes.INTEGER, defaultValue: 0 },
   max_puan: { type: DataTypes.INTEGER, defaultValue: 100 },
   ders_kodu: { type: DataTypes.STRING, allowNull: false }
+}, {
+  tableName: 'criteria',
+  freezeTableName: true
 });
 
 // 5. PUAN
@@ -111,39 +126,62 @@ const Grade = sequelize.define('Grade', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
+  submissionId: {
+    type: DataTypes.INTEGER,
+    allowNull: false
+  },
+  criterionId: {
+    type: DataTypes.INTEGER,
+    allowNull: false
+  },
   puanlanan_ogrenci_id: { 
     type: DataTypes.INTEGER,
     allowNull: false
   }
   
+}, {
+  tableName: 'grades',
+  freezeTableName: true,
+  indexes: [
+    {
+      unique: true,
+      fields: ['submissionId', 'puan_veren_id', 'criterionId']
+    }
+  ]
 });
 // 6. İZİN VERİLEN ÖĞRENCİLER 
 const AllowedStudent = sequelize.define('AllowedStudent', {
   ogrenci_no: { type: DataTypes.STRING, unique: true, allowNull: false },
   ad_soyad: { type: DataTypes.STRING },
   dersler: { type: DataTypes.TEXT, defaultValue: '' } 
+}, {
+  tableName: 'allowed_students',
+  freezeTableName: true
 });
 // 7. GENEL AYARLAR 
 const Settings = sequelize.define('Settings', {
   key: { type: DataTypes.STRING, unique: true },
   value: { type: DataTypes.STRING }
+}, {
+  tableName: 'settings',
+  freezeTableName: true
 });
 
 // --- İLİŞKİLER ---
-User.hasMany(Submission); 
-Submission.belongsTo(User);
+User.hasMany(Submission, { foreignKey: 'userId', as: 'submissions' });
+Submission.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
 AllowedStudent.belongsTo(User, { as: 'RegisteredUser', foreignKey: 'ogrenci_no', targetKey: 'ogrenci_no', constraints: false });
 User.hasMany(AllowedStudent, { foreignKey: 'ogrenci_no', sourceKey: 'ogrenci_no', constraints: false });
 
-Submission.hasMany(Grade); 
-Grade.belongsTo(Submission);
+Submission.hasMany(Grade, { foreignKey: 'submissionId', as: 'grades' });
+Grade.belongsTo(Submission, { foreignKey: 'submissionId', as: 'submission' });
 
-User.hasMany(Grade, { as: 'VerilenPuanlar', foreignKey: 'puan_veren_id' });
-Grade.belongsTo(User, { as: 'PuanVeren', foreignKey: 'puan_veren_id' });
+User.hasMany(Grade, { as: 'givenGrades', foreignKey: 'puan_veren_id' });
+Grade.belongsTo(User, { as: 'puanVeren', foreignKey: 'puan_veren_id' });
 
-Criterion.hasMany(Grade);
-Grade.belongsTo(Criterion);
+Criterion.hasMany(Grade, { foreignKey: 'criterionId', as: 'grades' });
+Grade.belongsTo(Criterion, { foreignKey: 'criterionId', as: 'criterion' });
 
 module.exports = {
   User,
