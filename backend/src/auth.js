@@ -22,7 +22,7 @@ const verifyPassword = async (plain, stored) => {
   return crypto.timingSafeEqual(storedBuf, key);
 };
 
-const needsRehash = (stored) =>
+const needsPasswordRehash = (stored) =>
   typeof stored === 'string' && !stored.startsWith(`${PREFIX}$`);
 
 module.exports = { hashPassword, verifyPassword, needsPasswordRehash };
