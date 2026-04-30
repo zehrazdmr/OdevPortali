@@ -147,10 +147,10 @@ app.post('/api/auth/login', async (req, res) => {
         dersler,
       },
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Sunucu hatası' });
-  }
+  }catch (err) {
+  console.error("LOGIN HATA:", err);
+  res.status(500).json({ error: err.message });
+}
 });
 
 app.post('/api/admin/upload-students', adminKontrol, async (req, res) => {
@@ -186,7 +186,8 @@ app.get('/api/courses', async (req, res) => {
     const courses = await Course.findAll({ order: [['ders_adi', 'ASC']] });
     res.json(courses);
   } catch (err) {
-    res.status(500).json({ error: 'Dersler yüklenemedi.' });
+    console.error("COURSES HATA:", err);  // 👈 EKLE
+    res.status(500).json({ error: err.message }); // 👈 DEĞİŞTİR
   }
 });
 
