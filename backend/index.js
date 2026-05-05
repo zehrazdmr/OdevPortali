@@ -36,6 +36,9 @@ const normNameLC = (v) => normName(v).toLocaleLowerCase('tr-TR');
 const getVideoLimitKey = (dersKodu) =>
   dersKodu ? `video_limit:${String(dersKodu).trim()}` : 'video_limit';
 
+const getEvaluationEnabledKey = (dersKodu) =>
+  dersKodu ? `evaluation_enabled:${String(dersKodu).trim()}` : 'evaluation_enabled';
+
 const DEFAULT_LIMIT = 3;
 
 const getEvaluationLimit = async (dersKodu) => {
@@ -49,22 +52,76 @@ const getEvaluationLimit = async (dersKodu) => {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_LIMIT;
 };
 
+const getEvaluationEnabled = async (dersKodu) => {
+  const setting = await Settings.findOne({ where: { key: getEvaluationEnabledKey(dersKodu) } });
+  if (!setting) return false;
+  return ['true', '1', 'yes', 'on'].includes(String(setting.value).toLowerCase());
+};
+
+const normalizeTableName = (name) => String(name || '').replace(/`/g, '').toLowerCase();
+
+const migrateLegacyAllowedStudentTable = async () => {
+  const queryInterface = sequelize.getQueryInterface();
+  const tables = await queryInterface.showAllTables();
+  const tableNames = tables.map(t => normalizeTableName(t.tableName || t.TABLE_NAME || t.name || t));
+  const hasLegacy = tableNames.includes('allowedstudents');
+  const hasCurrent = tableNames.includes('allowed_students');
+
+  if (!hasLegacy) return;
+
+  if (!hasCurrent) {
+    await queryInterface.renameTable('allowedstudents', 'allowed_students');
+    console.log('ℹ️ Legacy allowedstudents tablosu allowed_students olarak yeniden adlandırıldı.');
+    return;
+  }
+
+  await sequelize.query(`
+    INSERT IGNORE INTO allowed_students (ogrenci_no, ad_soyad, dersler, createdAt, updatedAt)
+    SELECT ogrenci_no, ad_soyad, dersler, NOW(), NOW()
+    FROM allowedstudents
+  `);
+
+  await queryInterface.dropTable('allowedstudents');
+  console.log('ℹ️ Legacy allowedstudents tablosu allowed_students ile birleştirildi ve silindi.');
+};
+
+const sumScore = (grades) => {
+  return (grades || []).reduce((acc, g) => {
+    const p = Number(g.puan);
+    return Number.isFinite(p) ? acc + p : acc;
+  }, 0);
+};
+
+const averageScore = (values) => {
+  const nums = (values || []).map(Number).filter(Number.isFinite);
+  if (!nums.length) return null;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+};
+
+const averageEvaluationScore = (grades, predicate = () => true) => {
+  const grouped = new Map();
+  for (const grade of grades || []) {
+    if (!predicate(grade)) continue;
+    const key = `${grade.submissionId}:${grade.puan_veren_id}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(grade);
+  }
+  return averageScore([...grouped.values()].map(sumScore));
+};
+
+const countEvaluations = (grades, predicate = () => true) => {
+  return new Set((grades || []).filter(predicate).map(g => g.puan_veren_id)).size || 0;
+};
+
+const countGivenEvaluations = (grades, predicate = () => true) => {
+  return new Set((grades || []).filter(predicate).map(g => g.submissionId)).size || 0;
+};
+
 const isAdminUser = async (user) => {
   if (!user || user.rol !== 'hoca') return false;
   if (user.is_admin) return true;
   const first = await User.findOne({ where: { rol: 'hoca' }, order: [['id', 'ASC']] });
   return !!first && first.id === user.id;
-};
-
-const weightedAvg = (grades) => {
-  const totals = grades.reduce((acc, g) => {
-    const p = Number(g.puan), m = Number(g.criterion?.max_puan ?? g.max_puan);
-    if (!Number.isFinite(p) || !Number.isFinite(m) || m <= 0) return acc;
-    acc.sum += p;
-    acc.max += m;
-    return acc;
-  }, { sum: 0, max: 0 });
-  return totals.max ? (totals.sum / totals.max) * 100 : null;
 };
 
 const adminKontrol = async (req, res, next) => {
@@ -270,6 +327,10 @@ app.get('/api/assign-video/:userId/:dersKodu', async (req, res) => {
   const userId = parseInt(req.params.userId, 10);
   const { dersKodu } = req.params;
   try {
+    const evaluationEnabled = await getEvaluationEnabled(dersKodu);
+    if (!evaluationEnabled) {
+      return res.status(403).json({ error: 'Bu ders için puanlama henüz açılmadı.', evaluationEnabled: false });
+    }
     const limit = await getEvaluationLimit(dersKodu);
     const gradedSubs = await Grade.findAll({
       where: { puan_veren_id: userId },
@@ -315,7 +376,9 @@ app.get('/api/can-evaluate/:userId/:dersKodu', async (req, res) => {
   const { userId, dersKodu } = req.params;
   const sub = await Submission.findOne({ where: { userId: parseInt(userId, 10), ders_kodu: dersKodu } });
   if (!sub) return res.json({ canEvaluate: false, message: 'Başkalarını puanlayabilmek için önce kendi projenizi yüklemelisiniz!' });
-  res.json({ canEvaluate: true });
+  const evaluationEnabled = await getEvaluationEnabled(dersKodu);
+  if (!evaluationEnabled) return res.json({ canEvaluate: false, evaluationEnabled: false, message: 'Hocanız bu ders için puanlamayı henüz açmadı.' });
+  res.json({ canEvaluate: true, evaluationEnabled: true });
 });
 
 app.get('/api/check-submission-status', async (req, res) => {
@@ -330,6 +393,8 @@ app.post('/api/grades', async (req, res) => {
     const submission = await Submission.findByPk(parseInt(submissionId, 10));
     if (!submission) return res.status(404).json({ error: 'Submission bulunamadı.' });
     if (!Array.isArray(scores) || !scores.length) return res.status(400).json({ error: 'En az bir kriter puanı gereklidir.' });
+    const evaluationEnabled = await getEvaluationEnabled(submission.ders_kodu);
+    if (!evaluationEnabled) return res.status(403).json({ error: 'Bu ders için puanlama henüz açılmadı.' });
 
     const limit = await getEvaluationLimit(submission.ders_kodu);
     const gradedSubs = await Grade.findAll({
@@ -493,7 +558,7 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       video_url: submission.video_url,
       proje_aciklamasi: submission.proje_aciklamasi,
       ders_kodu: submission.ders_kodu,
-      hoca_genel_puani: weightedAvg(alinanHoca.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+      hoca_genel_puani: averageEvaluationScore(alinanHoca),
       criterias,
       student: submission.user,
       hocaPuanlari,
@@ -503,11 +568,15 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       alinanTumPuanlar: alinanTum,
       ogrenciVerdigiPuanlar,
       istatistikler: {
-        hocaGenelPuani: weightedAvg(alinanHoca.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
-        alinanHocaOrtalamasi: weightedAvg(alinanHoca.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
-        alinanAkranOrtalamasi: weightedAvg(alinanAkran.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
-        alinanGenelOrtalama: weightedAvg(alinanTum.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
-        verdigiOrtalama: weightedAvg(ogrenciVerdigiPuanlar.map(g => ({ puan: g.puan, criterion: { max_puan: g.max_puan } }))),
+        hocaGenelPuani: averageEvaluationScore(alinanHoca),
+        alinanHocaOrtalamasi: averageEvaluationScore(alinanHoca),
+        alinanAkranOrtalamasi: averageEvaluationScore(alinanAkran),
+        alinanGenelOrtalama: averageEvaluationScore(alinanTum),
+        alinanDegerlendirmeSayisi: countEvaluations(alinanTum),
+        alinanHocaDegerlendirmeSayisi: countEvaluations(alinanHoca),
+        alinanAkranDegerlendirmeSayisi: countEvaluations(alinanAkran),
+        verdigiOrtalama: averageEvaluationScore(verilenGrades.filter(g => g.submission?.userId !== submission.userId)),
+        verdigiDegerlendirmeSayisi: countGivenEvaluations(verilenGrades, g => g.submission?.userId !== submission.userId),
       },
     });
   } catch (err) {
@@ -557,7 +626,12 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
     const givenGrades = userIds.length ? await Grade.findAll({
       where: { puan_veren_id: { [Op.in]: userIds } },
       include: [
-        { model: Submission, as: 'submission', include: [{ model: User, as: 'user', attributes: ['id'] }] },
+        {
+          model: Submission,
+          as: 'submission',
+          where: { ders_kodu: dersKodu },
+          include: [{ model: User, as: 'user', attributes: ['id'] }],
+        },
         { model: Criterion, as: 'criterion', attributes: ['max_puan'] },
       ],
     }) : [];
@@ -588,9 +662,9 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
       return {
         ...s.toJSON(),
         RegisteredUser: safeUser ? { ...safeUser, Submissions: sub ? [sub] : [] } : null,
-        alinan_ortalama: sub ? weightedAvg((receivedBySubId[sub.id] || []).map(g => ({ puan: g.puan, criterion: g.criterion }))) : null,
-        verdigi_ortalama: user ? weightedAvg((givenByUserId[user.id] || []).map(g => ({ puan: g.puan, criterion: g.criterion }))) : null,
-        hoca_genel_puani: sub ? weightedAvg((hocaBySubId[sub.id] || []).map(g => ({ puan: g.puan, criterion: g.criterion }))) : null,
+        alinan_ortalama: sub ? averageEvaluationScore(receivedBySubId[sub.id] || []) : null,
+        verdigi_ortalama: user ? averageEvaluationScore(givenByUserId[user.id] || []) : null,
+        hoca_genel_puani: sub ? averageEvaluationScore(hocaBySubId[sub.id] || []) : null,
       };
     });
     res.json(result);
@@ -650,6 +724,24 @@ app.delete('/api/admin/instructors/:id', adminKontrol, async (req, res) => {
   }
 });
 
+app.post('/api/admin/users/:id/reset-password', adminKontrol, async (req, res) => {
+  if (!req.isAdmin) return res.status(403).json({ error: 'Şifre sıfırlama yetkisi sadece admin hocadadır.' });
+  const userId = parseInt(req.params.id, 10);
+  const newPassword = String(req.body?.newPassword || '').trim();
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'Yeni şifre en az 6 karakter olmalıdır.' });
+  }
+  try {
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
+    await user.update({ sifre: await hashPassword(newPassword) });
+    res.json({ message: 'Şifre sıfırlandı.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Şifre sıfırlanamadı.' });
+  }
+});
+
 app.get('/api/settings/video_limit', adminKontrol, async (req, res) => {
   const dersKodu = String(req.query.dersKodu || '').trim();
   if (!dersKodu) return res.status(400).json({ error: 'dersKodu zorunludur.' });
@@ -669,6 +761,25 @@ app.post('/api/settings/update-limit', adminKontrol, async (req, res) => {
   res.json({ success: true, message: 'Limit başarıyla güncellendi!' });
 });
 
+app.get('/api/settings/evaluation_enabled', adminKontrol, async (req, res) => {
+  const dersKodu = String(req.query.dersKodu || '').trim();
+  if (!dersKodu) return res.status(400).json({ error: 'dersKodu zorunludur.' });
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders ayarını güncelleyemezsiniz.' });
+  const setting = await Settings.findOne({ where: { key: getEvaluationEnabledKey(dersKodu) } });
+  res.json({ value: setting?.value ?? 'false' });
+});
+
+app.post('/api/settings/update-evaluation-enabled', adminKontrol, async (req, res) => {
+  const dersKodu = String(req.body?.dersKodu || '').trim();
+  const enabled = req.body?.enabled;
+  if (!dersKodu) return res.status(400).json({ error: 'dersKodu zorunludur.' });
+  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled boolean olmalıdır.' });
+  if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders ayarını güncelleyemezsiniz.' });
+  const key = getEvaluationEnabledKey(dersKodu);
+  await Settings.upsert({ key, value: enabled ? 'true' : 'false' });
+  res.json({ success: true, message: enabled ? 'Puanlama açıldı.' : 'Puanlama kapatıldı.' });
+});
+
 const PORT = process.env.PORT || 5002;
 
 const startServer = async () => {
@@ -678,6 +789,7 @@ const startServer = async () => {
     // "Duplicate column name" hatası verebiliyor. Bu yüzden alter'i sadece açıkça istenirse kullan.
     const shouldAlterSchema = process.env.SYNC_ALTER === 'true' && process.env.NODE_ENV !== 'production';
     await sequelize.sync(shouldAlterSchema ? { alter: true } : {});
+    await migrateLegacyAllowedStudentTable();
     app.listen(PORT, () => console.log(`📡 Sunucu çalışıyor: ${PORT}`));
   } catch (err) {
     console.error('Sunucu başlatılamadı:', err);

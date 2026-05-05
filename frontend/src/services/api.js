@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://selakademi.tr/api';
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://localhost:3000/api';
 
 const buildUrl = (endpoint, query = {}) => {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -81,6 +81,7 @@ export const api = {
   evaluations: {
     checkSubmissionStatus: (userId, dersKodu) =>
       request('/check-submission-status', { query: { userId, dersKodu } }),
+    canEvaluate: (userId, dersKodu) => request(`/can-evaluate/${userId}/${dersKodu}`),
     assignVideo: (userId, dersKodu) => request(`/assign-video/${userId}/${dersKodu}`)
   },
   grades: {
@@ -91,6 +92,7 @@ export const api = {
     listInstructors: (headers) => request('/admin/instructors', { headers }),
     createInstructor: (body, headers) => request('/admin/instructors', { method: 'POST', body, headers }),
     deleteInstructor: (id, headers) => request(`/admin/instructors/${id}`, { method: 'DELETE', headers }),
+    resetPassword: (id, body, headers) => request(`/admin/users/${id}/reset-password`, { method: 'POST', body, headers }),
     listSubmissions: (dersKodu, headers) => request(`/admin/submissions/${dersKodu}`, { headers }),
     listAllStudentsStatus: (dersKodu, headers) => request(`/admin/all-students-status/${dersKodu}`, { headers }),
     getSubmissionDetail: (submissionId, headers) => request(`/admin/submission-detail/${submissionId}`, { headers }),
@@ -98,6 +100,8 @@ export const api = {
   },
   settings: {
     getVideoLimit: (dersKodu, headers) => request('/settings/video_limit', { query: { dersKodu }, headers }),
-    updateVideoLimit: (body, headers) => request('/settings/update-limit', { method: 'POST', body, headers })
+    updateVideoLimit: (body, headers) => request('/settings/update-limit', { method: 'POST', body, headers }),
+    getEvaluationEnabled: (dersKodu, headers) => request('/settings/evaluation_enabled', { query: { dersKodu }, headers }),
+    updateEvaluationEnabled: (body, headers) => request('/settings/update-evaluation-enabled', { method: 'POST', body, headers })
   }
 };

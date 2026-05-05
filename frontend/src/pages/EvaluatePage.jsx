@@ -9,6 +9,8 @@ export default function EvaluatePage() {
   const [scores, setScores] = useState({});
   const [watchFinished, setWatchFinished] = useState(false);
   const [hasUploaded, setHasUploaded] = useState(null);
+  const [canEvaluate, setCanEvaluate] = useState(null);
+  const [permissionMessage, setPermissionMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -24,6 +26,12 @@ export default function EvaluatePage() {
         const uploaded = statusRes.data?.hasUploaded;
         setHasUploaded(uploaded);
         if (!uploaded) { setLoading(false); return; }
+
+        const canEvaluateRes = await api.evaluations.canEvaluate(user.id, selectedCourse);
+        const allowed = canEvaluateRes.data?.canEvaluate;
+        setCanEvaluate(allowed);
+        setPermissionMessage(canEvaluateRes.data?.message || '');
+        if (!allowed) { setLoading(false); return; }
 
         const assignRes = await api.evaluations.assignVideo(user.id, selectedCourse);
         if (!assignRes.ok) {
@@ -85,6 +93,19 @@ export default function EvaluatePage() {
           <h2 className="text-xl font-bold text-gray-900 mb-2">Erişim Engellendi</h2>
           <p className="text-gray-500 text-sm mb-6">Başkalarını puanlayabilmek için önce kendi projenizi yüklemeniz gerekiyor.</p>
           <button onClick={() => navigate('/dashboard')} className="btn-primary">Proje Yükle</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (canEvaluate === false) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="card p-8 max-w-md text-center">
+          <div className="text-5xl mb-4">⏳</div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Puanlama Kapalı</h2>
+          <p className="text-gray-500 text-sm mb-6">{permissionMessage || 'Hocanız bu ders için puanlamayı henüz açmadı.'}</p>
+          <button onClick={() => navigate('/dashboard')} className="btn-primary">Panele Dön</button>
         </div>
       </div>
     );

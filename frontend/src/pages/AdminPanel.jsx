@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api } from '../services/api';
 
 const fmtAvg = (v) => (v != null ? Number(v).toFixed(1) : '—');
+const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
 
 export default function AdminPanel() {
   const navigate = useNavigate();
@@ -16,6 +17,8 @@ export default function AdminPanel() {
   const [instructors, setInstructors] = useState([]);
   const [filterStatus, setFilterStatus] = useState('all');
   const [evaluationLimit, setEvaluationLimit] = useState('');
+  const [evaluationEnabled, setEvaluationEnabled] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: 'alinan_ortalama', direction: 'desc' });
 
   // Formlar
   const [kriterAdi, setKriterAdi] = useState('');
@@ -44,6 +47,14 @@ export default function AdminPanel() {
   const accessibleCourses = useMemo(() =>
     courses.filter(c => accessibleCodes.includes(c.ders_kodu)), [courses, accessibleCodes]);
 
+  const handleSort = (key) => {
+    setSortConfig(curr => (
+      curr.key === key
+        ? { key, direction: curr.direction === 'asc' ? 'desc' : 'asc' }
+        : { key, direction: 'desc' }
+    ));
+  };
+
   const fetchData = useCallback(async () => {
     try {
       const [cRes, iRes] = await Promise.all([api.courses.list(), api.admin.listInstructors(authHeaders)]);
@@ -59,6 +70,7 @@ export default function AdminPanel() {
         setAllStudents((stRes.data || []).map(s => ({
           id: s.id, ogrenci_no: s.ogrenci_no, ad_soyad: s.ad_soyad,
           isRegistered: !!s.RegisteredUser,
+          RegisteredUser: s.RegisteredUser || null,
           alinan_ortalama: s.alinan_ortalama,
           verdigi_ortalama: s.verdigi_ortalama,
           hoca_genel_puani: s.hoca_genel_puani ?? null,
@@ -70,12 +82,18 @@ export default function AdminPanel() {
 
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
-    const fetchLimit = async () => {
+    const fetchLimitAndPermission = async () => {
       if (!selectedCourse) return;
-      const r = await api.settings.getVideoLimit(selectedCourse, authHeaders);
-      if (r.ok && r.data?.value) setEvaluationLimit(String(parseInt(r.data.value)));
+      const [limitRes, enabledRes] = await Promise.all([
+        api.settings.getVideoLimit(selectedCourse, authHeaders),
+        api.settings.getEvaluationEnabled(selectedCourse, authHeaders),
+      ]);
+      if (limitRes.ok && limitRes.data?.value) setEvaluationLimit(String(parseInt(limitRes.data.value)));
+      if (enabledRes.ok && enabledRes.data?.value != null) {
+        setEvaluationEnabled(['true', '1', 'yes', 'on'].includes(String(enabledRes.data.value).toLowerCase()));
+      }
     };
-    fetchLimit();
+    fetchLimitAndPermission();
     fetchData();
   }, [fetchData, selectedCourse, user]);
 
@@ -147,6 +165,50 @@ export default function AdminPanel() {
     if (r.ok) { fetchData(); } else alert(r.error);
   };
 
+  const handleResetPassword = async (id, label) => {
+    const newPassword = window.prompt(`${label} için yeni şifre girin (en az 6 karakter):`);
+    if (!newPassword) return;
+    if (newPassword.trim().length < 6) {
+      alert('Şifre en az 6 karakter olmalı.');
+      return;
+    }
+    if (!window.confirm(`${label} şifresi sıfırlansın mı?`)) return;
+    const r = await api.admin.resetPassword(id, { newPassword: newPassword.trim() }, authHeaders);
+    if (r.ok) alert(`✅ ${r.data.message}`); else alert(`❌ ${r.error}`);
+  };
+
+  const exportStudentList = (rows, label) => {
+    if (!rows.length) {
+      alert('Dışa aktarılacak kayıt bulunamadı.');
+      return;
+    }
+
+    const sheetRows = [
+      ['ÖĞRENCİ LİSTESİ'],
+      ['Ders:', selectedCourse],
+      ['Liste:', label],
+      [''],
+      ['#', 'Öğrenci No', 'Ad Soyad', 'Durum', 'Aldığı Ortalama', 'Verdiği Ortalama', 'Hoca Ortalaması'],
+      ...rows.map((s, idx) => [
+        idx + 1,
+        s.ogrenci_no,
+        s.ad_soyad,
+        !s.isRegistered ? 'Kayıtsız' : !s.Submission ? 'Video Yok' : 'Tamam',
+        s.alinan_ortalama != null ? Number(s.alinan_ortalama).toFixed(1) : '',
+        s.verdigi_ortalama != null ? Number(s.verdigi_ortalama).toFixed(1) : '',
+        s.hoca_genel_puani != null ? Number(s.hoca_genel_puani).toFixed(1) : '',
+      ]),
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Öğrenciler');
+    const safeCourse = selectedCourse || 'ders';
+    XLSX.writeFile(wb, `${safeCourse}_${label.replace(/\s+/g, '_')}.xlsx`);
+  };
+
+  const exportVisibleStudents = () => exportStudentList(filtered, 'liste');
+
   // ── Öğrenci Raporu ────────────────────────────────────────────────────────
   const openReport = async (student) => {
     if (!student.Submission) { alert('Öğrenci henüz video yüklememiş.'); return; }
@@ -183,11 +245,13 @@ export default function AdminPanel() {
     if (!submissionDetail || !reportModal) return;
     const d = submissionDetail;
     const rows = [
-      ['ÖĞRENCI RAPORU'], ['Ders:', selectedCourse], ['Öğrenci:', reportModal.ad_soyad], ['No:', reportModal.ogrenci_no], [''],
+      ['ÖĞRENCİ RAPORU'], ['Ders:', selectedCourse], ['Öğrenci:', reportModal.ad_soyad], ['No:', reportModal.ogrenci_no], [''],
       ['Aldığı Ortalama:', fmtAvg(d.istatistikler?.alinanGenelOrtalama)],
       ['Akran Ortalaması:', fmtAvg(d.istatistikler?.alinanAkranOrtalamasi)],
-      ['Hoca Puanı:', fmtAvg(d.istatistikler?.hocaGenelPuani)],
+      ['Hoca Ortalaması:', fmtAvg(d.istatistikler?.hocaGenelPuani)],
       ['Verdiği Ortalama:', fmtAvg(d.istatistikler?.verdigiOrtalama)],
+      ['Onu Değerlendiren Sayısı:', fmtCount(d.istatistikler?.alinanDegerlendirmeSayisi)],
+      ['Değerlendirdiği Kişi Sayısı:', fmtCount(d.istatistikler?.verdigiDegerlendirmeSayisi)],
     ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -201,11 +265,29 @@ export default function AdminPanel() {
     return match ? `https://www.youtube.com/embed/${match[1]}?rel=0` : null;
   };
 
-  const filtered = allStudents.filter(s => {
-    if (filterStatus === 'not_registered') return !s.isRegistered;
-    if (filterStatus === 'no_video') return s.isRegistered && !s.Submission;
-    return true;
-  });
+  const visibleStudents = useMemo(() => {
+    const filteredStudents = allStudents.filter(s => {
+      if (filterStatus === 'not_registered') return !s.isRegistered;
+      if (filterStatus === 'no_video') return s.isRegistered && !s.Submission;
+      return true;
+    });
+
+    return [...filteredStudents].sort((a, b) => {
+      const av = a[sortConfig.key];
+      const bv = b[sortConfig.key];
+      const aMissing = av == null || Number.isNaN(Number(av));
+      const bMissing = bv == null || Number.isNaN(Number(bv));
+
+      if (aMissing && bMissing) return 0;
+      if (aMissing) return 1;
+      if (bMissing) return -1;
+
+      const diff = Number(av) - Number(bv);
+      return sortConfig.direction === 'asc' ? diff : -diff;
+    });
+  }, [allStudents, filterStatus, sortConfig]);
+
+  const filtered = visibleStudents;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -244,6 +326,31 @@ export default function AdminPanel() {
               const r = await api.settings.updateVideoLimit({ limit: parseInt(evaluationLimit), dersKodu: selectedCourse }, authHeaders);
               if (r.ok) alert('✅ ' + r.data.message); else alert('❌ ' + r.error);
             }} className="btn-primary w-full">Güncelle</button>
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <button
+                onClick={async () => {
+                  const next = !evaluationEnabled;
+                  const r = await api.settings.updateEvaluationEnabled({ dersKodu: selectedCourse, enabled: next }, authHeaders);
+                  if (r.ok) {
+                    setEvaluationEnabled(next);
+                    alert('✅ ' + r.data.message);
+                  } else {
+                    alert('❌ ' + r.error);
+                  }
+                }}
+                className="w-full flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2.5 hover:bg-gray-100 transition-colors"
+              >
+                <span className="text-sm font-medium text-gray-700">Puanlama İzni</span>
+                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${evaluationEnabled ? 'bg-emerald-600' : 'bg-gray-300'}`}>
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${evaluationEnabled ? 'translate-x-5' : 'translate-x-0.5'}`}
+                  />
+                </span>
+              </button>
+              <div className="mt-2 text-xs text-gray-500 text-right">
+                {evaluationEnabled ? 'Açık' : 'Kapalı'}
+              </div>
+            </div>
           </div>
 
           {/* Öğrenci Listesi Yükleme */}
@@ -297,6 +404,11 @@ export default function AdminPanel() {
               ))}
             </div>
           </div>
+          <div className="px-4 pb-4 flex justify-end">
+            <button onClick={exportVisibleStudents} className="text-xs px-3 py-1.5 rounded-lg font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">
+              Listeyi İndir
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
@@ -305,14 +417,27 @@ export default function AdminPanel() {
                   <th className="px-4 py-3 text-left">Öğrenci No</th>
                   <th className="px-4 py-3 text-left">Ad Soyad</th>
                   <th className="px-4 py-3 text-left">Durum</th>
-                  <th className="px-4 py-3 text-right">Aldığı Ort.</th>
-                  <th className="px-4 py-3 text-right">Verdiği Ort.</th>
-                  <th className="px-4 py-3 text-right">Hoca Puanı</th>
+                  <th className="px-4 py-3 text-right">
+                    <button type="button" onClick={() => handleSort('alinan_ortalama')} className="inline-flex w-full items-center justify-end gap-1">
+                      <span>Aldığı Ortalama</span><span className="text-[10px]">{sortConfig.key === 'alinan_ortalama' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 text-right">
+                    <button type="button" onClick={() => handleSort('verdigi_ortalama')} className="inline-flex w-full items-center justify-end gap-1">
+                      <span>Verdiği Ortalama</span><span className="text-[10px]">{sortConfig.key === 'verdigi_ortalama' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</span>
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 text-right">
+                    <button type="button" onClick={() => handleSort('hoca_genel_puani')} className="inline-flex w-full items-center justify-end gap-1">
+                      <span>Hoca Ortalaması</span><span className="text-[10px]">{sortConfig.key === 'hoca_genel_puani' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</span>
+                    </button>
+                  </th>
+                  {user?.is_admin && <th className="px-4 py-3 text-right">İşlem</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Öğrenci bulunamadı.</td></tr>
+                  <tr><td colSpan={user?.is_admin ? 8 : 7} className="px-4 py-8 text-center text-gray-400">Öğrenci bulunamadı.</td></tr>
                 ) : filtered.map((s, i) => (
                   <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-3 py-3 text-center text-xs font-medium text-gray-400">{i + 1}</td>
@@ -330,6 +455,20 @@ export default function AdminPanel() {
                     <td className="px-4 py-3 text-right text-gray-700">{fmtAvg(s.alinan_ortalama)}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmtAvg(s.verdigi_ortalama)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">{s.hoca_genel_puani != null ? Number(s.hoca_genel_puani).toFixed(1) : '—'}</td>
+                    {user?.is_admin && (
+                      <td className="px-4 py-3 text-right">
+                        {s.isRegistered && s.RegisteredUser ? (
+                          <button
+                            onClick={() => handleResetPassword(s.RegisteredUser.id, s.ad_soyad)}
+                            className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded px-2 py-1 hover:bg-indigo-50 transition-colors"
+                          >
+                            Şifre Sıfırla
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -388,10 +527,18 @@ export default function AdminPanel() {
                       <div className="text-xs text-gray-400">{i.ogrenci_no} | {(i.authorized_courses || []).join(', ') || '—'}</div>
                     </div>
                     {user?.is_admin && (
-                      <button onClick={() => handleDeleteInstructor(i.id)}
-                        className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1 hover:bg-red-50 transition-colors ml-3">
-                        Sil
-                      </button>
+                      <div className="flex items-center gap-2 ml-3">
+                        <button
+                          onClick={() => handleResetPassword(i.id, i.ad_soyad)}
+                          className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded px-2 py-1 hover:bg-indigo-50 transition-colors"
+                        >
+                          Şifre Sıfırla
+                        </button>
+                        <button onClick={() => handleDeleteInstructor(i.id)}
+                          className="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-1 hover:bg-red-50 transition-colors">
+                          Sil
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -466,13 +613,15 @@ export default function AdminPanel() {
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: 'Aldığı Ort.', val: submissionDetail?.istatistikler?.alinanGenelOrtalama },
-                    { label: 'Akran Ort.', val: submissionDetail?.istatistikler?.alinanAkranOrtalamasi },
-                    { label: 'Hoca Puanı', val: submissionDetail?.istatistikler?.hocaGenelPuani },
-                    { label: 'Verdiği Ort.', val: submissionDetail?.istatistikler?.verdigiOrtalama },
-                  ].map(({ label, val }) => (
+                    { label: 'Aldığı Ortalama', val: submissionDetail?.istatistikler?.alinanGenelOrtalama, count: false },
+                    { label: 'Akran Ortalaması', val: submissionDetail?.istatistikler?.alinanAkranOrtalamasi, count: false },
+                    { label: 'Hoca Ortalaması', val: submissionDetail?.istatistikler?.hocaGenelPuani, count: false },
+                    { label: 'Verdiği Ortalama', val: submissionDetail?.istatistikler?.verdigiOrtalama, count: false },
+                    { label: 'Onu Değerlendiren', val: submissionDetail?.istatistikler?.alinanDegerlendirmeSayisi, count: true },
+                    { label: 'Değerlendirdiği Kişi', val: submissionDetail?.istatistikler?.verdigiDegerlendirmeSayisi, count: true },
+                  ].map(({ label, val, count }) => (
                     <div key={label} className="bg-gray-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-primary-700">{fmtAvg(val)}</div>
+                      <div className="text-2xl font-bold text-primary-700">{count ? fmtCount(val) : fmtAvg(val)}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
                     </div>
                   ))}
