@@ -878,11 +878,12 @@ app.post('/api/settings/update-evaluation-enabled', adminKontrol, async (req, re
   res.json({ success: true, message: enabled ? 'Puanlama açıldı.' : 'Puanlama kapatıldı.' });
 });
 
-app.get('*', (req, res, next) => {
+app.use((req, res, next) => {
   if (!hasFrontendBuild) return next();
+  if (req.method !== 'GET') return next();
   if (req.path.startsWith('/api')) return next();
   if (path.extname(req.path)) return next();
-  res.sendFile(frontendIndexPath);
+  return res.sendFile(frontendIndexPath);
 });
 
 const PORT = process.env.PORT || 5002;
