@@ -7,7 +7,6 @@ export default function EvaluatePage() {
   const [submission, setSubmission] = useState(null);
   const [criteria, setCriteria] = useState([]);
   const [scores, setScores] = useState({});
-  const [watchFinished, setWatchFinished] = useState(false);
   const [hasUploaded, setHasUploaded] = useState(null);
   const [canEvaluate, setCanEvaluate] = useState(null);
   const [permissionMessage, setPermissionMessage] = useState('');
@@ -19,19 +18,29 @@ export default function EvaluatePage() {
   const selectedCourse = localStorage.getItem('selectedCourse') || '';
 
   useEffect(() => {
-    if (!user) { navigate('/login'); return; }
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+
     const checkAndLoad = async () => {
       try {
         const statusRes = await api.evaluations.checkSubmissionStatus(user.id, selectedCourse);
         const uploaded = statusRes.data?.hasUploaded;
         setHasUploaded(uploaded);
-        if (!uploaded) { setLoading(false); return; }
+        if (!uploaded) {
+          setLoading(false);
+          return;
+        }
 
         const canEvaluateRes = await api.evaluations.canEvaluate(user.id, selectedCourse);
         const allowed = canEvaluateRes.data?.canEvaluate;
         setCanEvaluate(allowed);
         setPermissionMessage(canEvaluateRes.data?.message || '');
-        if (!allowed) { setLoading(false); return; }
+        if (!allowed) {
+          setLoading(false);
+          return;
+        }
 
         const assignRes = await api.evaluations.assignVideo(user.id, selectedCourse);
         if (!assignRes.ok) {
@@ -49,13 +58,16 @@ export default function EvaluatePage() {
         setLoading(false);
       }
     };
+
     checkAndLoad();
-  }, []);
+  }, [navigate, selectedCourse, user]);
 
   const submitEvaluation = async () => {
     if (Object.keys(scores).length < criteria.length) {
-      alert('Lütfen tüm kriterleri puanlayın!'); return;
+      alert('Lütfen tüm kriterleri puanlayın!');
+      return;
     }
+
     setSaving(true);
     try {
       const res = await api.grades.create({
@@ -91,7 +103,9 @@ export default function EvaluatePage() {
         <div className="card p-8 max-w-md text-center">
           <div className="text-5xl mb-4">🚫</div>
           <h2 className="text-xl font-bold text-gray-900 mb-2">Erişim Engellendi</h2>
-          <p className="text-gray-500 text-sm mb-6">Başkalarını puanlayabilmek için önce kendi projenizi yüklemeniz gerekiyor.</p>
+          <p className="text-gray-500 text-sm mb-6">
+            Başkalarını puanlayabilmek için önce kendi projenizi yüklemeniz gerekiyor.
+          </p>
           <button onClick={() => navigate('/dashboard')} className="btn-primary">Proje Yükle</button>
         </div>
       </div>
@@ -104,22 +118,25 @@ export default function EvaluatePage() {
         <div className="card p-8 max-w-md text-center">
           <div className="text-5xl mb-4">⏳</div>
           <h2 className="text-xl font-bold text-gray-900 mb-2">Puanlama Kapalı</h2>
-          <p className="text-gray-500 text-sm mb-6">{permissionMessage || 'Hocanız bu ders için puanlamayı henüz açmadı.'}</p>
+          <p className="text-gray-500 text-sm mb-6">
+            {permissionMessage || 'Hocanız bu ders için puanlamayı henüz açmadı.'}
+          </p>
           <button onClick={() => navigate('/dashboard')} className="btn-primary">Panele Dön</button>
         </div>
       </div>
     );
   }
 
-  if (!submission) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="card p-8 text-center text-gray-500">Puanlanacak proje bulunamadı.</div>
-    </div>
-  );
+  if (!submission) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="card p-8 text-center text-gray-500">Puanlanacak proje bulunamadı.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-primary-800 text-white shadow">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center gap-4">
           <button onClick={() => navigate('/dashboard')} className="text-primary-200 hover:text-white transition-colors text-sm">
@@ -131,21 +148,13 @@ export default function EvaluatePage() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
-        {/* Video */}
         <div className="card p-5">
           <h2 className="font-semibold text-gray-900 mb-4">🎬 Proje Videosu</h2>
-          <SmartPlayer videoUrl={submission.video_url} onWatchComplete={setWatchFinished} />
-          {!watchFinished && (
-            <div className="mt-3 flex items-center gap-2 text-amber-600 text-sm bg-amber-50 border border-amber-200 rounded-lg p-3">
-              <span>⚠️</span>
-              <span>Puan verebilmek için videoyu <strong>%90</strong> izlemeniz gerekiyor.</span>
-            </div>
-          )}
+          <SmartPlayer videoUrl={submission.video_url} />
         </div>
 
-        {/* Kriterler */}
         {criteria.length > 0 && (
-          <div className={`card p-5 transition-opacity ${watchFinished ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+          <div className="card p-5">
             <h3 className="font-semibold text-gray-900 mb-4">⭐ Değerlendirme Kriterleri</h3>
             <div className="space-y-4">
               {criteria.map(c => (
@@ -155,10 +164,11 @@ export default function EvaluatePage() {
                     <div className="text-xs text-gray-400">0 – {c.max_puan} puan</div>
                   </div>
                   <input
-                    type="number" min={0} max={c.max_puan}
+                    type="number"
+                    min={0}
+                    max={c.max_puan}
                     className="input-field w-24 text-center"
                     placeholder={`/ ${c.max_puan}`}
-                    disabled={!watchFinished}
                     value={scores[c.id] ?? ''}
                     onChange={e => setScores({ ...scores, [c.id]: e.target.value })}
                   />
@@ -167,7 +177,7 @@ export default function EvaluatePage() {
             </div>
             <button
               onClick={submitEvaluation}
-              disabled={!watchFinished || saving}
+              disabled={saving}
               className="btn-primary w-full mt-5 py-3 text-base"
             >
               {saving ? 'Gönderiliyor...' : 'Değerlendirmeyi Gönder'}

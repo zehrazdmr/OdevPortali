@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const { Op } = require('sequelize');
 const { sequelize, connectDB } = require('./db');
 const {
@@ -17,6 +19,14 @@ const { hashPassword, verifyPassword, needsPasswordRehash } = require('./src/aut
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const frontendBuildPath = path.join(__dirname, '../frontend/build');
+const frontendIndexPath = path.join(frontendBuildPath, 'index.html');
+const hasFrontendBuild = fs.existsSync(frontendIndexPath);
+
+if (hasFrontendBuild) {
+  app.use(express.static(frontendBuildPath));
+}
 
 const parseDersler = (val) => {
   if (Array.isArray(val)) return [...new Set(val.map(String).map(s => s.trim()).filter(Boolean))];
@@ -85,6 +95,20 @@ const migrateLegacyAllowedStudentTable = async () => {
   console.log('ℹ️ Legacy allowedstudents tablosu allowed_students ile birleştirildi ve silindi.');
 };
 
+const normalizeAllowedStudentTable = async () => {
+  const rows = await AllowedStudent.findAll();
+  for (const row of rows) {
+    const normalizedDersler = parseDersler(row.dersler).join(',');
+    const normalizedName = normName(row.ad_soyad);
+    if (row.dersler !== normalizedDersler || row.ad_soyad !== normalizedName) {
+      await row.update({
+        dersler: normalizedDersler,
+        ad_soyad: normalizedName || row.ad_soyad,
+      });
+    }
+  }
+};
+
 const sumScore = (grades) => {
   return (grades || []).reduce((acc, g) => {
     const p = Number(g.puan);
@@ -115,6 +139,59 @@ const countEvaluations = (grades, predicate = () => true) => {
 
 const countGivenEvaluations = (grades, predicate = () => true) => {
   return new Set((grades || []).filter(predicate).map(g => g.submissionId)).size || 0;
+};
+
+const buildStudentSubmissionSummary = async (submission) => {
+  if (!submission) return null;
+
+  const receivedGrades = await Grade.findAll({
+    where: { submissionId: submission.id },
+    include: [
+      { model: Criterion, as: 'criterion', attributes: ['id', 'kriter_adi', 'max_puan'] },
+      { model: User, as: 'puanVeren', attributes: ['id', 'ad_soyad', 'rol'] },
+    ],
+  });
+
+  const givenGrades = await Grade.findAll({
+    where: { puan_veren_id: submission.userId },
+    include: [
+      { model: Criterion, as: 'criterion', attributes: ['kriter_adi', 'max_puan'] },
+      {
+        model: Submission,
+        as: 'submission',
+        where: { ders_kodu: submission.ders_kodu },
+        include: [{ model: User, as: 'user', attributes: ['id'] }],
+      },
+    ],
+  });
+
+  const alinanHoca = receivedGrades.filter(g => g.puanVeren?.rol === 'hoca');
+  const alinanAkran = receivedGrades.filter(g => g.puanVeren?.rol !== 'hoca');
+  const verilenDetaylar = givenGrades.filter(g => g.submission?.userId !== submission.userId);
+
+  return {
+    submission: {
+      id: submission.id,
+      userId: submission.userId,
+      video_url: submission.video_url,
+      proje_aciklamasi: submission.proje_aciklamasi,
+      ders_kodu: submission.ders_kodu,
+      hoca_puani: submission.hoca_puani,
+      createdAt: submission.createdAt,
+      updatedAt: submission.updatedAt,
+    },
+    istatistikler: {
+      hocaGenelPuani: averageEvaluationScore(alinanHoca),
+      alinanHocaOrtalamasi: averageEvaluationScore(alinanHoca),
+      alinanAkranOrtalamasi: averageEvaluationScore(alinanAkran),
+      alinanGenelOrtalama: averageEvaluationScore(receivedGrades),
+      alinanDegerlendirmeSayisi: countEvaluations(receivedGrades),
+      alinanHocaDegerlendirmeSayisi: countEvaluations(alinanHoca),
+      alinanAkranDegerlendirmeSayisi: countEvaluations(alinanAkran),
+      verdigiOrtalama: averageEvaluationScore(verilenDetaylar),
+      verdigiDegerlendirmeSayisi: countGivenEvaluations(verilenDetaylar),
+    },
+  };
 };
 
 const isAdminUser = async (user) => {
@@ -164,7 +241,12 @@ app.post('/api/auth/register', async (req, res) => {
     if (yetkisiz) return res.status(403).json({ error: `${yetkisiz} dersini almaya yetkiniz görünmüyor.` });
 
     const hashedSifre = await hashPassword(sifre);
-    await User.create({ ogrenci_no: no, ad_soyad: isim, sifre: hashedSifre, rol: 'ogrenci' });
+    await User.create({
+      ogrenci_no: no,
+      ad_soyad: isim,
+      sifre: hashedSifre,
+      rol: 'ogrenci',
+    });
     res.json({ message: 'Kayıt başarılı' });
   } catch (err) {
     console.error(err);
@@ -307,11 +389,19 @@ app.post('/api/submissions', async (req, res) => {
   const { userId, video_url, ders_kodu, proje_aciklamasi } = req.body;
   if (!userId || !video_url || !ders_kodu) return res.status(400).json({ error: 'UserId, video_url ve ders_kodu gereklidir.' });
   try {
-    const existing = await Submission.findOne({ where: { userId: parseInt(userId, 10), ders_kodu } });
-    if (existing) return res.status(400).json({ error: 'Bu ders için zaten bir video yüklediniz.' });
+    const normalizedUserId = parseInt(userId, 10);
+    const existing = await Submission.findOne({ where: { userId: normalizedUserId, ders_kodu } });
+
+    if (existing) {
+      await existing.update({
+        video_url,
+        proje_aciklamasi: proje_aciklamasi || '',
+      });
+      return res.json({ message: 'Videonuz güncellendi!' });
+    }
 
     await Submission.create({
-      userId: parseInt(userId, 10),
+      userId: normalizedUserId,
       video_url,
       ders_kodu,
       proje_aciklamasi: proje_aciklamasi || '',
@@ -384,7 +474,15 @@ app.get('/api/can-evaluate/:userId/:dersKodu', async (req, res) => {
 app.get('/api/check-submission-status', async (req, res) => {
   const { userId, dersKodu } = req.query;
   const sub = await Submission.findOne({ where: { userId: parseInt(userId, 10), ders_kodu: dersKodu } });
-  res.json({ hasUploaded: !!sub });
+  if (!sub) {
+    return res.json({ hasUploaded: false, submission: null, istatistikler: null });
+  }
+
+  const summary = await buildStudentSubmissionSummary(sub);
+  res.json({
+    hasUploaded: true,
+    ...summary,
+  });
 });
 
 app.post('/api/grades', async (req, res) => {
@@ -780,6 +878,13 @@ app.post('/api/settings/update-evaluation-enabled', adminKontrol, async (req, re
   res.json({ success: true, message: enabled ? 'Puanlama açıldı.' : 'Puanlama kapatıldı.' });
 });
 
+app.get('*', (req, res, next) => {
+  if (!hasFrontendBuild) return next();
+  if (req.path.startsWith('/api')) return next();
+  if (path.extname(req.path)) return next();
+  res.sendFile(frontendIndexPath);
+});
+
 const PORT = process.env.PORT || 5002;
 
 const startServer = async () => {
@@ -790,6 +895,7 @@ const startServer = async () => {
     const shouldAlterSchema = process.env.SYNC_ALTER === 'true' && process.env.NODE_ENV !== 'production';
     await sequelize.sync(shouldAlterSchema ? { alter: true } : {});
     await migrateLegacyAllowedStudentTable();
+    await normalizeAllowedStudentTable();
     app.listen(PORT, () => console.log(`📡 Sunucu çalışıyor: ${PORT}`));
   } catch (err) {
     console.error('Sunucu başlatılamadı:', err);
