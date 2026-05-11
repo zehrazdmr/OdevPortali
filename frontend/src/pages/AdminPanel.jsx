@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api } from '../services/api';
 
-const fmtAvg = (v) => (v != null ? Number(v).toFixed(1) : '—');
 const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
 const fmtScore = (v) => {
   if (v == null || v === '') return '—';
@@ -28,6 +27,8 @@ const fmtScore = (v) => {
   if (!Number.isFinite(numeric)) return '—';
   return numeric.toFixed(1);
 };
+
+const fmtTableScore = (v) => fmtScore(v);
 
 export default function AdminPanel() {
   const navigate = useNavigate();
@@ -217,9 +218,9 @@ export default function AdminPanel() {
         s.ogrenci_no,
         s.ad_soyad,
         !s.isRegistered ? 'Kayıtsız' : !s.Submission ? 'Video Yok' : 'Tamam',
-        s.alinan_ortalama != null ? Number(s.alinan_ortalama).toFixed(1) : '',
-        s.verdigi_ortalama != null ? Number(s.verdigi_ortalama).toFixed(1) : '',
-        s.hoca_genel_puani != null ? Number(s.hoca_genel_puani).toFixed(1) : '',
+        fmtTableScore(s.alinan_ortalama),
+        fmtTableScore(s.verdigi_ortalama),
+        fmtTableScore(s.hoca_genel_puani),
       ]),
     ];
 
@@ -475,9 +476,9 @@ export default function AdminPanel() {
                         : !s.Submission ? <span className="badge-amber">Video Yok</span>
                         : <span className="badge-green">Tamam</span>}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmtAvg(s.alinan_ortalama)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmtAvg(s.verdigi_ortalama)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-800">{s.hoca_genel_puani != null ? Number(s.hoca_genel_puani).toFixed(1) : '—'}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtTableScore(s.alinan_ortalama)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmtTableScore(s.verdigi_ortalama)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-gray-800">{fmtTableScore(s.hoca_genel_puani)}</td>
                     {user?.is_admin && (
                       <td className="px-4 py-3 text-right">
                         {s.isRegistered && s.RegisteredUser ? (
