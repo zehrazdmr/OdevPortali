@@ -2,17 +2,27 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 
-const fmtAvg = (value) => (value != null ? Number(value).toFixed(1) : '—');
 const fmtCount = (value) => (value != null ? String(Number(value)) : '—');
 const fmtScore = (value) => {
+  if (value == null || value === '') return 'Puan yok';
   if (value && typeof value === 'object') {
+    if (typeof value.display === 'string' && value.display.trim()) return value.display;
     const total = Number(value.total);
     const max = Number(value.max);
     if (Number.isFinite(total) && Number.isFinite(max)) {
       return `${total.toFixed(1)} / ${max.toFixed(1)}`;
     }
+    const percentage = Number(value.percentage);
+    if (Number.isFinite(percentage)) {
+      return `${percentage.toFixed(1)}%`;
+    }
+    if (typeof value.formatted === 'string' && value.formatted.trim()) {
+      return value.formatted;
+    }
   }
-  return fmtAvg(value);
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'Puan yok';
+  return numeric.toFixed(1);
 };
 
 export default function Dashboard() {

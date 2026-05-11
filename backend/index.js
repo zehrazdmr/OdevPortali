@@ -131,48 +131,10 @@ const getGradeVersionStamp = (grade) => {
   return Number.isFinite(id) ? id : 0;
 };
 
-const weightedAvg = (grades, predicate = () => true) => {
-  const deduped = new Map();
-
-  for (const grade of grades || []) {
-    if (!predicate(grade)) continue;
-
-    const criterionId = Number(grade?.criterionId ?? grade?.criterion?.id);
-    const voterId = Number(grade?.puan_veren_id);
-    const score = Number(grade?.puan);
-    const maxPuan = Number(grade?.criterion?.max_puan);
-
-    if (!Number.isFinite(criterionId) || !Number.isFinite(voterId)) continue;
-    if (!Number.isFinite(score) || !Number.isFinite(maxPuan) || maxPuan <= 0) continue;
-
-    const key = `${criterionId}:${voterId}`;
-    const nextStamp = getGradeVersionStamp(grade);
-    const nextId = Number(grade?.id) || 0;
-    const current = deduped.get(key);
-
-    if (!current || nextStamp > current.stamp || (nextStamp === current.stamp && nextId > current.id)) {
-      deduped.set(key, {
-        stamp: nextStamp,
-        id: nextId,
-        score,
-        maxPuan,
-      });
-    }
-  }
-
-  if (!deduped.size) return null;
-
-  let totalScore = 0;
-  let totalMax = 0;
-
-  for (const item of deduped.values()) {
-    totalScore += item.score;
-    totalMax += item.maxPuan;
-  }
-
-  if (!totalMax) return null;
-
-  return Math.min(100, (totalScore / totalMax) * 100);
+const formatScoreNumber = (value) => {
+  if (!Number.isFinite(value)) return '0';
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
 };
 
 const summarizeGrades = (grades, predicate = () => true, groupKeyFn = (grade) => grade?.puan_veren_id) => {
@@ -212,28 +174,58 @@ const summarizeGrades = (grades, predicate = () => true, groupKeyFn = (grade) =>
     }
   }
 
-  if (!groupMap.size || !criterionMaxById.size) return null;
+  if (!groupMap.size || !criterionMaxById.size) {
+    return {
+      total: null,
+      max: null,
+      percentage: null,
+      display: 'Puan yok',
+    };
+  }
 
-  const groupScores = [];
+  const groupTotals = [];
   for (const groupGrades of groupMap.values()) {
     let totalScore = 0;
     for (const item of groupGrades.values()) {
       totalScore += item.score;
     }
-    groupScores.push(totalScore);
+    groupTotals.push(totalScore);
   }
 
-  if (!groupScores.length) return null;
+  if (!groupTotals.length) {
+    return {
+      total: null,
+      max: null,
+      percentage: null,
+      display: 'Puan yok',
+    };
+  }
 
-  const total = groupScores.reduce((acc, value) => acc + value, 0) / groupScores.length;
+  const total = groupTotals.reduce((acc, value) => acc + value, 0) / groupTotals.length;
   const max = [...criterionMaxById.values()].reduce((acc, value) => acc + value, 0);
-  if (!max) return null;
+
+  if (!Number.isFinite(total) || !Number.isFinite(max) || max <= 0) {
+    return {
+      total: null,
+      max: null,
+      percentage: null,
+      display: 'Puan yok',
+    };
+  }
+
+  const safeTotal = Math.min(total, max);
+  const percentage = Math.min(100, (safeTotal / max) * 100);
 
   return {
-    total,
+    total: safeTotal,
     max,
-    percentage: Math.min(100, (total / max) * 100),
+    percentage,
+    display: `${formatScoreNumber(safeTotal)} / ${formatScoreNumber(max)}`,
   };
+};
+
+const weightedAvg = (grades, predicate = () => true) => {
+  return summarizeGrades(grades, predicate)?.percentage ?? null;
 };
 
 const countEvaluations = (grades, predicate = () => true) => {
@@ -722,6 +714,7 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       const kayit = {
         id: g.id,
         criterionId: g.criterion?.id,
+        puan_veren_id: g.puan_veren_id,
         puan: g.puan,
         kriter_adi: g.criterion?.kriter_adi,
         max_puan: g.criterion?.max_puan,

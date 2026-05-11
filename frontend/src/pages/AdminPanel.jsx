@@ -6,14 +6,27 @@ import { api } from '../services/api';
 const fmtAvg = (v) => (v != null ? Number(v).toFixed(1) : '—');
 const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
 const fmtScore = (v) => {
+  if (v == null || v === '') return '—';
   if (v && typeof v === 'object') {
+    if (typeof v.display === 'string' && v.display.trim()) {
+      return v.display;
+    }
     const total = Number(v.total);
     const max = Number(v.max);
     if (Number.isFinite(total) && Number.isFinite(max)) {
       return `${total.toFixed(1)} / ${max.toFixed(1)}`;
     }
+    const percentage = Number(v.percentage);
+    if (Number.isFinite(percentage)) {
+      return `${percentage.toFixed(1)}%`;
+    }
+    if (typeof v.formatted === 'string' && v.formatted.trim()) {
+      return v.formatted;
+    }
   }
-  return fmtAvg(v);
+  const numeric = Number(v);
+  if (!Number.isFinite(numeric)) return '—';
+  return numeric.toFixed(1);
 };
 
 export default function AdminPanel() {
