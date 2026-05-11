@@ -4,6 +4,16 @@ import { api } from '../services/api';
 
 const fmtAvg = (value) => (value != null ? Number(value).toFixed(1) : '—');
 const fmtCount = (value) => (value != null ? String(Number(value)) : '—');
+const fmtScore = (value) => {
+  if (value && typeof value === 'object') {
+    const total = Number(value.total);
+    const max = Number(value.max);
+    if (Number.isFinite(total) && Number.isFinite(max)) {
+      return `${total.toFixed(1)} / ${max.toFixed(1)}`;
+    }
+  }
+  return fmtAvg(value);
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -141,15 +151,15 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: 'Aldığın Ortalama', value: summary.alinanGenelOrtalama, kind: 'avg' },
-              { label: 'Akran Ortalaması', value: summary.alinanAkranOrtalamasi, kind: 'avg' },
-              { label: 'Hoca Ortalaması', value: summary.hocaGenelPuani, kind: 'avg' },
+              { label: 'Aldığın Puan', value: summary.alinanGenelOrtalama, kind: 'score' },
+              { label: 'Akran Puanı', value: summary.alinanAkranOrtalamasi, kind: 'score' },
+              { label: 'Hoca Puanı', value: summary.hocaGenelPuani, kind: 'score' },
               { label: 'Seni Değerlendiren', value: summary.alinanDegerlendirmeSayisi, kind: 'count' },
             ].map(card => (
               <div key={card.label} className="card p-4">
                 <div className="text-xs uppercase tracking-wide text-gray-500">{card.label}</div>
                 <div className="mt-2 text-3xl font-bold text-primary-700">
-                  {card.kind === 'count' ? fmtCount(card.value) : fmtAvg(card.value)}
+                  {card.kind === 'count' ? fmtCount(card.value) : fmtScore(card.value)}
                 </div>
               </div>
             ))}

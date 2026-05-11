@@ -122,15 +122,118 @@ const averageScore = (values) => {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 };
 
-const averageEvaluationScore = (grades, predicate = () => true) => {
-  const grouped = new Map();
+const getGradeVersionStamp = (grade) => {
+  const updatedAt = grade?.updatedAt ? new Date(grade.updatedAt).getTime() : NaN;
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = grade?.createdAt ? new Date(grade.createdAt).getTime() : NaN;
+  if (Number.isFinite(createdAt)) return createdAt;
+  const id = Number(grade?.id);
+  return Number.isFinite(id) ? id : 0;
+};
+
+const weightedAvg = (grades, predicate = () => true) => {
+  const deduped = new Map();
+
   for (const grade of grades || []) {
     if (!predicate(grade)) continue;
-    const key = `${grade.submissionId}:${grade.puan_veren_id}`;
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(grade);
+
+    const criterionId = Number(grade?.criterionId ?? grade?.criterion?.id);
+    const voterId = Number(grade?.puan_veren_id);
+    const score = Number(grade?.puan);
+    const maxPuan = Number(grade?.criterion?.max_puan);
+
+    if (!Number.isFinite(criterionId) || !Number.isFinite(voterId)) continue;
+    if (!Number.isFinite(score) || !Number.isFinite(maxPuan) || maxPuan <= 0) continue;
+
+    const key = `${criterionId}:${voterId}`;
+    const nextStamp = getGradeVersionStamp(grade);
+    const nextId = Number(grade?.id) || 0;
+    const current = deduped.get(key);
+
+    if (!current || nextStamp > current.stamp || (nextStamp === current.stamp && nextId > current.id)) {
+      deduped.set(key, {
+        stamp: nextStamp,
+        id: nextId,
+        score,
+        maxPuan,
+      });
+    }
   }
-  return averageScore([...grouped.values()].map(sumScore));
+
+  if (!deduped.size) return null;
+
+  let totalScore = 0;
+  let totalMax = 0;
+
+  for (const item of deduped.values()) {
+    totalScore += item.score;
+    totalMax += item.maxPuan;
+  }
+
+  if (!totalMax) return null;
+
+  return Math.min(100, (totalScore / totalMax) * 100);
+};
+
+const summarizeGrades = (grades, predicate = () => true, groupKeyFn = (grade) => grade?.puan_veren_id) => {
+  const groupMap = new Map();
+  const criterionMaxById = new Map();
+
+  for (const grade of grades || []) {
+    if (!predicate(grade)) continue;
+
+    const criterionId = Number(grade?.criterionId ?? grade?.criterion?.id);
+    const voterId = Number(grade?.puan_veren_id);
+    const score = Number(grade?.puan);
+    const maxPuan = Number(grade?.criterion?.max_puan);
+
+    if (!Number.isFinite(criterionId) || !Number.isFinite(voterId)) continue;
+    if (!Number.isFinite(score) || !Number.isFinite(maxPuan) || maxPuan <= 0) continue;
+
+    criterionMaxById.set(criterionId, maxPuan);
+
+    const groupKey = String(groupKeyFn(grade) ?? voterId);
+    if (!groupMap.has(groupKey)) {
+      groupMap.set(groupKey, new Map());
+    }
+
+    const groupGrades = groupMap.get(groupKey);
+    const current = groupGrades.get(criterionId);
+    const nextStamp = getGradeVersionStamp(grade);
+    const nextId = Number(grade?.id) || 0;
+
+    if (!current || nextStamp > current.stamp || (nextStamp === current.stamp && nextId > current.id)) {
+      groupGrades.set(criterionId, {
+        id: nextId,
+        stamp: nextStamp,
+        score,
+        maxPuan,
+      });
+    }
+  }
+
+  if (!groupMap.size || !criterionMaxById.size) return null;
+
+  const groupScores = [];
+  for (const groupGrades of groupMap.values()) {
+    let totalScore = 0;
+    for (const item of groupGrades.values()) {
+      totalScore += item.score;
+    }
+    groupScores.push(totalScore);
+  }
+
+  if (!groupScores.length) return null;
+
+  const total = groupScores.reduce((acc, value) => acc + value, 0) / groupScores.length;
+  const max = [...criterionMaxById.values()].reduce((acc, value) => acc + value, 0);
+  if (!max) return null;
+
+  return {
+    total,
+    max,
+    percentage: Math.min(100, (total / max) * 100),
+  };
 };
 
 const countEvaluations = (grades, predicate = () => true) => {
@@ -181,14 +284,18 @@ const buildStudentSubmissionSummary = async (submission) => {
       updatedAt: submission.updatedAt,
     },
     istatistikler: {
-      hocaGenelPuani: averageEvaluationScore(alinanHoca),
-      alinanHocaOrtalamasi: averageEvaluationScore(alinanHoca),
-      alinanAkranOrtalamasi: averageEvaluationScore(alinanAkran),
-      alinanGenelOrtalama: averageEvaluationScore(receivedGrades),
+      hocaGenelPuani: summarizeGrades(alinanHoca),
+      alinanHocaOrtalamasi: summarizeGrades(alinanHoca),
+      alinanAkranOrtalamasi: summarizeGrades(alinanAkran),
+      alinanGenelOrtalama: summarizeGrades(receivedGrades),
       alinanDegerlendirmeSayisi: countEvaluations(receivedGrades),
       alinanHocaDegerlendirmeSayisi: countEvaluations(alinanHoca),
       alinanAkranDegerlendirmeSayisi: countEvaluations(alinanAkran),
-      verdigiOrtalama: averageEvaluationScore(verilenDetaylar),
+      verdigiOrtalama: summarizeGrades(
+        verilenDetaylar,
+        () => true,
+        (grade) => `${grade?.submissionId}:${grade?.puan_veren_id}`,
+      ),
       verdigiDegerlendirmeSayisi: countGivenEvaluations(verilenDetaylar),
     },
   };
@@ -564,13 +671,18 @@ app.get('/api/admin/submissions/:dersKodu', adminKontrol, async (req, res) => {
       where: { ders_kodu: dersKodu },
       include: [
         { model: User, as: 'user', attributes: ['ad_soyad', 'ogrenci_no'] },
-        { model: Grade, as: 'grades', attributes: ['puan'] },
+        {
+          model: Grade,
+          as: 'grades',
+          attributes: ['id', 'puan', 'puan_veren_id', 'criterionId', 'createdAt', 'updatedAt'],
+          include: [{ model: Criterion, as: 'criterion', attributes: ['max_puan'] }],
+        },
       ],
     });
     res.json(subs.map(s => ({
       ...s.toJSON(),
       User: { ad_soyad: s.user.ad_soyad, ogrenci_no: s.user.ogrenci_no },
-      ortalama_puan: s.grades.length ? s.grades.reduce((a, g) => a + g.puan, 0) / s.grades.length : null,
+      ortalama_puan: weightedAvg(s.grades),
     })));
   } catch (err) {
     console.error(err);
@@ -656,7 +768,7 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       video_url: submission.video_url,
       proje_aciklamasi: submission.proje_aciklamasi,
       ders_kodu: submission.ders_kodu,
-      hoca_genel_puani: averageEvaluationScore(alinanHoca),
+      hoca_genel_puani: summarizeGrades(alinanHoca)?.percentage ?? null,
       criterias,
       student: submission.user,
       hocaPuanlari,
@@ -666,14 +778,18 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       alinanTumPuanlar: alinanTum,
       ogrenciVerdigiPuanlar,
       istatistikler: {
-        hocaGenelPuani: averageEvaluationScore(alinanHoca),
-        alinanHocaOrtalamasi: averageEvaluationScore(alinanHoca),
-        alinanAkranOrtalamasi: averageEvaluationScore(alinanAkran),
-        alinanGenelOrtalama: averageEvaluationScore(alinanTum),
+        hocaGenelPuani: summarizeGrades(alinanHoca),
+        alinanHocaOrtalamasi: summarizeGrades(alinanHoca),
+        alinanAkranOrtalamasi: summarizeGrades(alinanAkran),
+        alinanGenelOrtalama: summarizeGrades(alinanTum),
         alinanDegerlendirmeSayisi: countEvaluations(alinanTum),
         alinanHocaDegerlendirmeSayisi: countEvaluations(alinanHoca),
         alinanAkranDegerlendirmeSayisi: countEvaluations(alinanAkran),
-        verdigiOrtalama: averageEvaluationScore(verilenGrades.filter(g => g.submission?.userId !== submission.userId)),
+        verdigiOrtalama: summarizeGrades(
+          verilenGrades.filter(g => g.submission?.userId !== submission.userId),
+          () => true,
+          (grade) => `${grade?.submissionId}:${grade?.puan_veren_id}`,
+        ),
         verdigiDegerlendirmeSayisi: countGivenEvaluations(verilenGrades, g => g.submission?.userId !== submission.userId),
       },
     });
@@ -701,7 +817,7 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
   const { dersKodu } = req.params;
   if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders bilgilerine erişemezsiniz.' });
   try {
-    const allowedAll = await AllowedStudent.findAll({ where: { dersler: { [Op.like]: `%${dersKodu}%` } } });
+    const allowedAll = await AllowedStudent.findAll();
     const allowed = allowedAll.filter(s => parseDersler(s.dersler).includes(dersKodu));
     const nos = allowed.map(s => s.ogrenci_no);
 
@@ -756,13 +872,20 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
     const result = allowed.map(s => {
       const user = userMap.get(s.ogrenci_no);
       const sub = user ? subMap.get(user.id) : null;
+      const receivedSummary = sub ? summarizeGrades(receivedBySubId[sub.id] || []) : null;
+      const givenSummary = user ? summarizeGrades(
+        givenByUserId[user.id] || [],
+        () => true,
+        (grade) => `${grade?.submissionId}:${grade?.puan_veren_id}`,
+      ) : null;
+      const hocaSummary = sub ? summarizeGrades(hocaBySubId[sub.id] || []) : null;
       const safeUser = user ? (({ sifre, ...rest }) => rest)(user.toJSON()) : null;
       return {
         ...s.toJSON(),
         RegisteredUser: safeUser ? { ...safeUser, Submissions: sub ? [sub] : [] } : null,
-        alinan_ortalama: sub ? averageEvaluationScore(receivedBySubId[sub.id] || []) : null,
-        verdigi_ortalama: user ? averageEvaluationScore(givenByUserId[user.id] || []) : null,
-        hoca_genel_puani: sub ? averageEvaluationScore(hocaBySubId[sub.id] || []) : null,
+        alinan_ortalama: receivedSummary?.percentage ?? null,
+        verdigi_ortalama: givenSummary?.percentage ?? null,
+        hoca_genel_puani: hocaSummary?.percentage ?? null,
       };
     });
     res.json(result);

@@ -5,6 +5,16 @@ import { api } from '../services/api';
 
 const fmtAvg = (v) => (v != null ? Number(v).toFixed(1) : '—');
 const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
+const fmtScore = (v) => {
+  if (v && typeof v === 'object') {
+    const total = Number(v.total);
+    const max = Number(v.max);
+    if (Number.isFinite(total) && Number.isFinite(max)) {
+      return `${total.toFixed(1)} / ${max.toFixed(1)}`;
+    }
+  }
+  return fmtAvg(v);
+};
 
 export default function AdminPanel() {
   const navigate = useNavigate();
@@ -246,10 +256,10 @@ export default function AdminPanel() {
     const d = submissionDetail;
     const rows = [
       ['ÖĞRENCİ RAPORU'], ['Ders:', selectedCourse], ['Öğrenci:', reportModal.ad_soyad], ['No:', reportModal.ogrenci_no], [''],
-      ['Aldığı Ortalama:', fmtAvg(d.istatistikler?.alinanGenelOrtalama)],
-      ['Akran Ortalaması:', fmtAvg(d.istatistikler?.alinanAkranOrtalamasi)],
-      ['Hoca Ortalaması:', fmtAvg(d.istatistikler?.hocaGenelPuani)],
-      ['Verdiği Ortalama:', fmtAvg(d.istatistikler?.verdigiOrtalama)],
+      ['Aldığı Puan:', fmtScore(d.istatistikler?.alinanGenelOrtalama)],
+      ['Akran Puanı:', fmtScore(d.istatistikler?.alinanAkranOrtalamasi)],
+      ['Hoca Puanı:', fmtScore(d.istatistikler?.hocaGenelPuani)],
+      ['Verdiği Puan:', fmtScore(d.istatistikler?.verdigiOrtalama)],
       ['Onu Değerlendiren Sayısı:', fmtCount(d.istatistikler?.alinanDegerlendirmeSayisi)],
       ['Değerlendirdiği Kişi Sayısı:', fmtCount(d.istatistikler?.verdigiDegerlendirmeSayisi)],
     ];
@@ -613,15 +623,15 @@ export default function AdminPanel() {
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: 'Aldığı Ortalama', val: submissionDetail?.istatistikler?.alinanGenelOrtalama, count: false },
-                    { label: 'Akran Ortalaması', val: submissionDetail?.istatistikler?.alinanAkranOrtalamasi, count: false },
-                    { label: 'Hoca Ortalaması', val: submissionDetail?.istatistikler?.hocaGenelPuani, count: false },
-                    { label: 'Verdiği Ortalama', val: submissionDetail?.istatistikler?.verdigiOrtalama, count: false },
+                    { label: 'Aldığı Puan', val: submissionDetail?.istatistikler?.alinanGenelOrtalama, count: false },
+                    { label: 'Akran Puanı', val: submissionDetail?.istatistikler?.alinanAkranOrtalamasi, count: false },
+                    { label: 'Hoca Puanı', val: submissionDetail?.istatistikler?.hocaGenelPuani, count: false },
+                    { label: 'Verdiği Puan', val: submissionDetail?.istatistikler?.verdigiOrtalama, count: false },
                     { label: 'Onu Değerlendiren', val: submissionDetail?.istatistikler?.alinanDegerlendirmeSayisi, count: true },
                     { label: 'Değerlendirdiği Kişi', val: submissionDetail?.istatistikler?.verdigiDegerlendirmeSayisi, count: true },
                   ].map(({ label, val, count }) => (
                     <div key={label} className="bg-gray-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-primary-700">{count ? fmtCount(val) : fmtAvg(val)}</div>
+                      <div className="text-2xl font-bold text-primary-700">{count ? fmtCount(val) : fmtScore(val)}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
                     </div>
                   ))}
