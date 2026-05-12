@@ -4,25 +4,12 @@ import { api } from '../services/api';
 
 const fmtCount = (value) => (value != null ? String(Number(value)) : '—');
 const fmtScore = (value) => {
-  if (value == null || value === '') return 'Puan yok';
-  if (value && typeof value === 'object') {
-    if (typeof value.display === 'string' && value.display.trim()) return value.display;
-    const total = Number(value.total);
-    const max = Number(value.max);
-    if (Number.isFinite(total) && Number.isFinite(max)) {
-      return `${total.toFixed(1)} / ${max.toFixed(1)}`;
-    }
-    const percentage = Number(value.percentage);
-    if (Number.isFinite(percentage)) {
-      return `${percentage.toFixed(1)}%`;
-    }
-    if (typeof value.formatted === 'string' && value.formatted.trim()) {
-      return value.formatted;
-    }
+  if (value == null || value === '') return '—';
+  if (value && typeof value === 'object' && typeof value.display === 'string' && value.display.trim()) {
+    return value.display;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 'Puan yok';
-  return numeric.toFixed(1);
+  if (typeof value === 'string' && value.trim()) return value;
+  return '—';
 };
 
 export default function Dashboard() {

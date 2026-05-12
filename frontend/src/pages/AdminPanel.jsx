@@ -10,22 +10,9 @@ const fmtScore = (v) => {
     if (typeof v.display === 'string' && v.display.trim()) {
       return v.display;
     }
-    const total = Number(v.total);
-    const max = Number(v.max);
-    if (Number.isFinite(total) && Number.isFinite(max)) {
-      return `${total.toFixed(1)} / ${max.toFixed(1)}`;
-    }
-    const percentage = Number(v.percentage);
-    if (Number.isFinite(percentage)) {
-      return `${percentage.toFixed(1)}%`;
-    }
-    if (typeof v.formatted === 'string' && v.formatted.trim()) {
-      return v.formatted;
-    }
   }
-  const numeric = Number(v);
-  if (!Number.isFinite(numeric)) return '—';
-  return numeric.toFixed(1);
+  if (typeof v === 'string' && v.trim()) return v;
+  return '—';
 };
 
 const fmtTableScore = (v) => fmtScore(v);
@@ -296,17 +283,26 @@ export default function AdminPanel() {
       return true;
     });
 
+    const getSortValue = (value) => {
+      if (value && typeof value === 'object') {
+        const total = Number(value.total);
+        return Number.isFinite(total) ? total : null;
+      }
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+
     return [...filteredStudents].sort((a, b) => {
-      const av = a[sortConfig.key];
-      const bv = b[sortConfig.key];
-      const aMissing = av == null || Number.isNaN(Number(av));
-      const bMissing = bv == null || Number.isNaN(Number(bv));
+      const av = getSortValue(a[sortConfig.key]);
+      const bv = getSortValue(b[sortConfig.key]);
+      const aMissing = av == null;
+      const bMissing = bv == null;
 
       if (aMissing && bMissing) return 0;
       if (aMissing) return 1;
       if (bMissing) return -1;
 
-      const diff = Number(av) - Number(bv);
+      const diff = av - bv;
       return sortConfig.direction === 'asc' ? diff : -diff;
     });
   }, [allStudents, filterStatus, sortConfig]);

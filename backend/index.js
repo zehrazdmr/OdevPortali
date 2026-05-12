@@ -131,101 +131,41 @@ const getGradeVersionStamp = (grade) => {
   return Number.isFinite(id) ? id : 0;
 };
 
-const formatScoreNumber = (value) => {
-  if (!Number.isFinite(value)) return '0';
-  const rounded = Math.round(value * 10) / 10;
-  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
-};
-
-const summarizeGrades = (grades, predicate = () => true, groupKeyFn = (grade) => grade?.puan_veren_id) => {
-  const groupMap = new Map();
-  const criterionMaxById = new Map();
-
-  for (const grade of grades || []) {
-    if (!predicate(grade)) continue;
-
-    const criterionId = Number(grade?.criterionId ?? grade?.criterion?.id);
-    const voterId = Number(grade?.puan_veren_id);
-    const score = Number(grade?.puan);
-    const maxPuan = Number(grade?.criterion?.max_puan);
-
-    if (!Number.isFinite(criterionId) || !Number.isFinite(voterId)) continue;
-    if (!Number.isFinite(score) || !Number.isFinite(maxPuan) || maxPuan <= 0) continue;
-
-    criterionMaxById.set(criterionId, maxPuan);
-
-    const groupKey = String(groupKeyFn(grade) ?? voterId);
-    if (!groupMap.has(groupKey)) {
-      groupMap.set(groupKey, new Map());
-    }
-
-    const groupGrades = groupMap.get(groupKey);
-    const current = groupGrades.get(criterionId);
-    const nextStamp = getGradeVersionStamp(grade);
-    const nextId = Number(grade?.id) || 0;
-
-    if (!current || nextStamp > current.stamp || (nextStamp === current.stamp && nextId > current.id)) {
-      groupGrades.set(criterionId, {
-        id: nextId,
-        stamp: nextStamp,
-        score,
-        maxPuan,
-      });
-    }
+const scoreSummary = (grades) => {
+  if (!grades || grades.length === 0) {
+    return { total: null, max: null, display: '—' };
   }
 
-  if (!groupMap.size || !criterionMaxById.size) {
-    return {
-      total: null,
-      max: null,
-      percentage: null,
-      display: 'Puan yok',
-    };
+  let total = 0;
+  let max = 0;
+
+  for (const g of grades) {
+    const puan = Number(g?.puan);
+    const maxPuan = Number(g?.criterion?.max_puan ?? g?.max_puan);
+
+    if (!Number.isFinite(puan) || !Number.isFinite(maxPuan)) continue;
+
+    total += puan;
+    max += maxPuan;
   }
 
-  const groupTotals = [];
-  for (const groupGrades of groupMap.values()) {
-    let totalScore = 0;
-    for (const item of groupGrades.values()) {
-      totalScore += item.score;
-    }
-    groupTotals.push(totalScore);
+  if (max <= 0) {
+    return { total: null, max: null, display: '—' };
   }
 
-  if (!groupTotals.length) {
-    return {
-      total: null,
-      max: null,
-      percentage: null,
-      display: 'Puan yok',
-    };
-  }
-
-  const total = groupTotals.reduce((acc, value) => acc + value, 0) / groupTotals.length;
-  const max = [...criterionMaxById.values()].reduce((acc, value) => acc + value, 0);
-
-  if (!Number.isFinite(total) || !Number.isFinite(max) || max <= 0) {
-    return {
-      total: null,
-      max: null,
-      percentage: null,
-      display: 'Puan yok',
-    };
-  }
-
-  const safeTotal = Math.min(total, max);
-  const percentage = Math.min(100, (safeTotal / max) * 100);
 
   return {
-    total: safeTotal,
+    total,
     max,
-    percentage,
-    display: `${formatScoreNumber(safeTotal)} / ${formatScoreNumber(max)}`,
+    display: `${total} / ${max}`,
   };
 };
 
-const weightedAvg = (grades, predicate = () => true) => {
-  return summarizeGrades(grades, predicate)?.percentage ?? null;
+const summarizeGrades = (grades) => scoreSummary(grades);
+
+const weightedAvg = (grades) => {
+  const summary = scoreSummary(grades);
+  return summary.total == null || summary.max == null ? null : summary.total;
 };
 
 const countEvaluations = (grades, predicate = () => true) => {
@@ -276,18 +216,14 @@ const buildStudentSubmissionSummary = async (submission) => {
       updatedAt: submission.updatedAt,
     },
     istatistikler: {
-      hocaGenelPuani: summarizeGrades(alinanHoca),
-      alinanHocaOrtalamasi: summarizeGrades(alinanHoca),
-      alinanAkranOrtalamasi: summarizeGrades(alinanAkran),
-      alinanGenelOrtalama: summarizeGrades(receivedGrades),
+      hocaGenelPuani: scoreSummary(alinanHoca),
+      alinanHocaOrtalamasi: scoreSummary(alinanHoca),
+      alinanAkranOrtalamasi: scoreSummary(alinanAkran),
+      alinanGenelOrtalama: scoreSummary(receivedGrades),
       alinanDegerlendirmeSayisi: countEvaluations(receivedGrades),
       alinanHocaDegerlendirmeSayisi: countEvaluations(alinanHoca),
       alinanAkranDegerlendirmeSayisi: countEvaluations(alinanAkran),
-      verdigiOrtalama: summarizeGrades(
-        verilenDetaylar,
-        () => true,
-        (grade) => `${grade?.submissionId}:${grade?.puan_veren_id}`,
-      ),
+      verdigiOrtalama: scoreSummary(verilenDetaylar),
       verdigiDegerlendirmeSayisi: countGivenEvaluations(verilenDetaylar),
     },
   };
@@ -674,7 +610,7 @@ app.get('/api/admin/submissions/:dersKodu', adminKontrol, async (req, res) => {
     res.json(subs.map(s => ({
       ...s.toJSON(),
       User: { ad_soyad: s.user.ad_soyad, ogrenci_no: s.user.ogrenci_no },
-      ortalama_puan: weightedAvg(s.grades),
+      ortalama_puan: scoreSummary(s.grades),
     })));
   } catch (err) {
     console.error(err);
@@ -761,7 +697,7 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       video_url: submission.video_url,
       proje_aciklamasi: submission.proje_aciklamasi,
       ders_kodu: submission.ders_kodu,
-      hoca_genel_puani: summarizeGrades(alinanHoca)?.percentage ?? null,
+      hoca_genel_puani: scoreSummary(alinanHoca),
       criterias,
       student: submission.user,
       hocaPuanlari,
@@ -771,18 +707,14 @@ app.get('/api/admin/submission-detail/:submissionId', adminKontrol, async (req, 
       alinanTumPuanlar: alinanTum,
       ogrenciVerdigiPuanlar,
       istatistikler: {
-        hocaGenelPuani: summarizeGrades(alinanHoca),
-        alinanHocaOrtalamasi: summarizeGrades(alinanHoca),
-        alinanAkranOrtalamasi: summarizeGrades(alinanAkran),
-        alinanGenelOrtalama: summarizeGrades(alinanTum),
+        hocaGenelPuani: scoreSummary(alinanHoca),
+        alinanHocaOrtalamasi: scoreSummary(alinanHoca),
+        alinanAkranOrtalamasi: scoreSummary(alinanAkran),
+        alinanGenelOrtalama: scoreSummary(alinanTum),
         alinanDegerlendirmeSayisi: countEvaluations(alinanTum),
         alinanHocaDegerlendirmeSayisi: countEvaluations(alinanHoca),
         alinanAkranDegerlendirmeSayisi: countEvaluations(alinanAkran),
-        verdigiOrtalama: summarizeGrades(
-          verilenGrades.filter(g => g.submission?.userId !== submission.userId),
-          () => true,
-          (grade) => `${grade?.submissionId}:${grade?.puan_veren_id}`,
-        ),
+        verdigiOrtalama: scoreSummary(verilenGrades.filter(g => g.submission?.userId !== submission.userId)),
         verdigiDegerlendirmeSayisi: countGivenEvaluations(verilenGrades, g => g.submission?.userId !== submission.userId),
       },
     });
@@ -865,20 +797,16 @@ app.get('/api/admin/all-students-status/:dersKodu', adminKontrol, async (req, re
     const result = allowed.map(s => {
       const user = userMap.get(s.ogrenci_no);
       const sub = user ? subMap.get(user.id) : null;
-      const receivedSummary = sub ? summarizeGrades(receivedBySubId[sub.id] || []) : null;
-      const givenSummary = user ? summarizeGrades(
-        givenByUserId[user.id] || [],
-        () => true,
-        (grade) => `${grade?.submissionId}:${grade?.puan_veren_id}`,
-      ) : null;
-      const hocaSummary = sub ? summarizeGrades(hocaBySubId[sub.id] || []) : null;
+      const receivedSummary = sub ? scoreSummary(receivedBySubId[sub.id] || []) : null;
+      const givenSummary = user ? scoreSummary(givenByUserId[user.id] || []) : null;
+      const hocaSummary = sub ? scoreSummary(hocaBySubId[sub.id] || []) : null;
       const safeUser = user ? (({ sifre, ...rest }) => rest)(user.toJSON()) : null;
       return {
         ...s.toJSON(),
         RegisteredUser: safeUser ? { ...safeUser, Submissions: sub ? [sub] : [] } : null,
-        alinan_ortalama: receivedSummary?.percentage ?? null,
-        verdigi_ortalama: givenSummary?.percentage ?? null,
-        hoca_genel_puani: hocaSummary?.percentage ?? null,
+        alinan_ortalama: receivedSummary,
+        verdigi_ortalama: givenSummary,
+        hoca_genel_puani: hocaSummary,
       };
     });
     res.json(result);
