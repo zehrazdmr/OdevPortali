@@ -133,31 +133,72 @@ const getGradeVersionStamp = (grade) => {
 
 const scoreSummary = (grades) => {
   if (!grades || grades.length === 0) {
-    return { total: null, max: null, display: '—' };
+    return { total: null, max: null, percentage: null, display: '—' };
   }
 
-  let total = 0;
-  let max = 0;
+  const evaluationMap = new Map();
+  const criterionMaxMap = new Map();
 
   for (const g of grades) {
     const puan = Number(g?.puan);
     const maxPuan = Number(g?.criterion?.max_puan ?? g?.max_puan);
+    const evaluatorId = g?.puan_veren_id ?? g?.puanVeren?.id ?? 'unknown';
+    const submissionId = g?.submissionId ?? g?.submission?.id ?? 'unknown';
+    const criterionId = g?.criterionId ?? g?.criterion?.id ?? 'unknown';
+
+    if (Number.isFinite(maxPuan) && !criterionMaxMap.has(criterionId)) {
+      criterionMaxMap.set(criterionId, maxPuan);
+    }
 
     if (!Number.isFinite(puan) || !Number.isFinite(maxPuan)) continue;
 
-    total += puan;
-    max += maxPuan;
+    const evalKey = `${submissionId}:${evaluatorId}`;
+    if (!evaluationMap.has(evalKey)) {
+      evaluationMap.set(evalKey, new Map());
+    }
+
+    const criterionMap = evaluationMap.get(evalKey);
+    const existing = criterionMap.get(criterionId);
+    const currentStamp = getGradeVersionStamp(g);
+    if (!existing || currentStamp >= existing.stamp) {
+      criterionMap.set(criterionId, { puan, stamp: currentStamp });
+    }
   }
 
-  if (max <= 0) {
-    return { total: null, max: null, display: '—' };
+  if (!evaluationMap.size) {
+    return { total: null, max: null, percentage: null, display: '—' };
   }
 
+  const max = [...criterionMaxMap.values()].reduce((acc, value) => acc + value, 0);
+  if (!Number.isFinite(max) || max <= 0) {
+    return { total: null, max: null, percentage: null, display: '—' };
+  }
+
+  let total = 0;
+  let evalCount = 0;
+
+  for (const criterionMap of evaluationMap.values()) {
+    let evalTotal = 0;
+    for (const item of criterionMap.values()) {
+      evalTotal += item.puan;
+    }
+    total += evalTotal;
+    evalCount += 1;
+  }
+
+  if (evalCount <= 0) {
+    return { total: null, max: null, percentage: null, display: '—' };
+  }
+
+  total = total / evalCount;
+  const percentage = Math.min(100, (total / max) * 100);
+  const rounded = Number.isFinite(percentage) ? Math.round(percentage * 100) / 100 : null;
 
   return {
-    total,
-    max,
-    display: `${total} / ${max}`,
+    total: rounded,
+    max: 100,
+    percentage: rounded,
+    display: `${rounded} / 100`,
   };
 };
 
