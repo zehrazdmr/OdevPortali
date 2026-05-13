@@ -421,11 +421,75 @@ app.post('/api/courses', adminKontrol, async (req, res) => {
 });
 
 app.delete('/api/courses/:dersKodu', adminKontrol, async (req, res) => {
-  const { dersKodu } = req.params;
+  const dersKodu = String(req.params.dersKodu || '').trim();
   if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
   try {
-    await Criterion.destroy({ where: { ders_kodu: dersKodu } });
-    await Course.destroy({ where: { ders_kodu: dersKodu } });
+    await sequelize.transaction(async (transaction) => {
+      const submissions = await Submission.findAll({
+        where: { ders_kodu: dersKodu },
+        attributes: ['id'],
+        transaction,
+      });
+      const criteria = await Criterion.findAll({
+        where: { ders_kodu: dersKodu },
+        attributes: ['id'],
+        transaction,
+      });
+
+      const submissionIds = submissions.map(s => s.id);
+      const criterionIds = criteria.map(c => c.id);
+
+      if (submissionIds.length || criterionIds.length) {
+        await Grade.destroy({
+          where: {
+            [Op.or]: [
+              ...(submissionIds.length ? [{ submissionId: { [Op.in]: submissionIds } }] : []),
+              ...(criterionIds.length ? [{ criterionId: { [Op.in]: criterionIds } }] : []),
+            ],
+          },
+          transaction,
+        });
+      }
+
+      if (submissionIds.length) {
+        await Submission.destroy({
+          where: { id: { [Op.in]: submissionIds } },
+          transaction,
+        });
+      }
+
+      if (criterionIds.length) {
+        await Criterion.destroy({
+          where: { id: { [Op.in]: criterionIds } },
+          transaction,
+        });
+      }
+
+      // allowed_students satırından bu ders kodunu çıkarıyoruz; liste boş kalırsa kaydı siliyoruz.
+      const allowedStudents = await AllowedStudent.findAll({ transaction });
+      for (const row of allowedStudents) {
+        const updatedCourses = parseDersler(row.dersler).filter(ders => ders !== dersKodu);
+        const nextDersler = updatedCourses.join(',');
+        if (row.dersler !== nextDersler) {
+          await row.update({ dersler: nextDersler }, { transaction });
+        }
+        if (!nextDersler) {
+          await row.destroy({ transaction });
+          await User.destroy({
+            where: {
+              ogrenci_no: row.ogrenci_no,
+              rol: 'ogrenci',
+            },
+            transaction,
+          });
+        }
+      }
+
+      await Course.destroy({
+        where: { ders_kodu: dersKodu },
+        transaction,
+      });
+    });
     res.json({ message: 'Ders silindi.' });
   } catch (err) {
     console.error(err);
