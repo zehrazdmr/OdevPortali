@@ -586,6 +586,67 @@ app.post('/api/criteria', adminKontrol, async (req, res) => {
   }
 });
 
+app.put('/api/criteria/:id', adminKontrol, async (req, res) => {
+  const criterionId = parseInt(req.params.id, 10);
+  const kriterAdi = String(req.body?.kriter_adi || '').trim();
+  const maxPuan = parseInt(req.body?.max_puan, 10);
+  if (!Number.isInteger(criterionId)) {
+    return res.status(400).json({ error: 'Geçersiz kriter.' });
+  }
+  if (!kriterAdi) {
+    return res.status(400).json({ error: 'Kriter adı gereklidir.' });
+  }
+  if (!Number.isInteger(maxPuan) || maxPuan <= 0) {
+    return res.status(400).json({ error: 'Geçerli bir max puan girin.' });
+  }
+  try {
+    const criterion = await Criterion.findByPk(criterionId);
+    if (!criterion) return res.status(404).json({ error: 'Kriter bulunamadı.' });
+    if (!hasCourseAccess(req.authorizedCourses, criterion.ders_kodu)) {
+      return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
+    }
+
+    await criterion.update({ kriter_adi: kriterAdi, max_puan: maxPuan });
+    res.json(criterion);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Kriter güncellenemedi.' });
+  }
+});
+
+app.delete('/api/criteria/:id', adminKontrol, async (req, res) => {
+  const criterionId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(criterionId)) {
+    return res.status(400).json({ error: 'Geçersiz kriter.' });
+  }
+  try {
+    await sequelize.transaction(async (transaction) => {
+      const criterion = await Criterion.findByPk(criterionId, { transaction });
+      if (!criterion) {
+        const err = new Error('Kriter bulunamadı.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (!hasCourseAccess(req.authorizedCourses, criterion.ders_kodu)) {
+        const err = new Error('Bu ders için yetkiniz yok.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      await Grade.destroy({
+        where: { criterionId },
+        transaction,
+      });
+      await criterion.destroy({ transaction });
+    });
+    res.json({ message: 'Kriter silindi.' });
+  } catch (err) {
+    console.error(err);
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    res.status(500).json({ error: 'Kriter silinemedi.' });
+  }
+});
+
 app.post('/api/submissions', async (req, res) => {
   const { userId, video_url, ders_kodu, proje_aciklamasi } = req.body;
   if (!userId || !video_url || !ders_kodu) return res.status(400).json({ error: 'UserId, video_url ve ders_kodu gereklidir.' });

@@ -137,8 +137,50 @@ export default function AdminPanel() {
   // ── Kriter Ekleme ─────────────────────────────────────────────────────────
   const handleAddCriterion = async (e) => {
     e.preventDefault();
-    await api.criteria.create({ kriter_adi: kriterAdi, max_puan: parseInt(maxPuan), ders_kodu: selectedCourse }, authHeaders);
-    setKriterAdi(''); setMaxPuan(100); fetchData();
+    const r = await api.criteria.create({ kriter_adi: kriterAdi, max_puan: parseInt(maxPuan), ders_kodu: selectedCourse }, authHeaders);
+    if (r.ok) {
+      setKriterAdi('');
+      setMaxPuan(100);
+      fetchData();
+    } else {
+      alert(r.error);
+    }
+  };
+
+  const handleUpdateCriterion = async (criterion) => {
+    const nextName = window.prompt('Yeni kriter adını girin:', criterion.kriter_adi);
+    if (nextName == null) return;
+    const trimmedName = nextName.trim();
+    if (!trimmedName) {
+      alert('Kriter adı boş olamaz.');
+      return;
+    }
+
+    const nextMax = window.prompt(`${trimmedName} için yeni max puan girin:`, String(criterion.max_puan));
+    if (nextMax == null) return;
+    const parsed = parseInt(nextMax, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      alert('Geçerli bir max puan girin.');
+      return;
+    }
+    const r = await api.criteria.update(criterion.id, { kriter_adi: trimmedName, max_puan: parsed }, authHeaders);
+    if (r.ok) {
+      fetchData();
+      alert('✅ Kriter güncellendi.');
+    } else {
+      alert(r.error);
+    }
+  };
+
+  const handleDeleteCriterion = async (criterion) => {
+    if (!window.confirm(`"${criterion.kriter_adi}" kriteri silinsin mi? Bu kriterin puan kayıtları da silinecek.`)) return;
+    const r = await api.criteria.remove(criterion.id, authHeaders);
+    if (r.ok) {
+      fetchData();
+      alert('✅ Kriter silindi.');
+    } else {
+      alert(r.error);
+    }
   };
 
   // ── Öğrenci Listesi Yükleme ───────────────────────────────────────────────
@@ -396,9 +438,27 @@ export default function AdminPanel() {
             {criteria.length > 0 && (
               <div className="mt-3 space-y-1">
                 {criteria.map(c => (
-                  <div key={c.id} className="flex items-center justify-between text-xs py-1 border-b border-gray-100">
-                    <span className="text-gray-700">{c.kriter_adi}</span>
-                    <span className="badge-blue">/{c.max_puan}</span>
+                  <div key={c.id} className="flex items-center justify-between gap-3 text-xs py-1 border-b border-gray-100">
+                    <div className="min-w-0">
+                      <span className="text-gray-700 block truncate">{c.kriter_adi}</span>
+                      <span className="badge-blue inline-flex mt-1">/{c.max_puan}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateCriterion(c)}
+                        className="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+                      >
+                        Düzenle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCriterion(c)}
+                        className="px-2 py-1 rounded-lg bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                      >
+                        Sil
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

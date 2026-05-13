@@ -73,7 +73,9 @@ export const api = {
   },
   criteria: {
     listByCourse: (dersKodu) => request(`/criteria/${dersKodu}`),
-    create: (body, headers) => request('/criteria', { method: 'POST', body, headers })
+    create: (body, headers) => request('/criteria', { method: 'POST', body, headers }),
+    update: (id, body, headers) => request(`/criteria/${id}`, { method: 'PUT', body, headers }),
+    remove: (id, headers) => request(`/criteria/${id}`, { method: 'DELETE', headers })
   },
   submissions: {
     create: (body) => request('/submissions', { method: 'POST', body })
