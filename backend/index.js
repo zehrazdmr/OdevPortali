@@ -51,6 +51,72 @@ const getEvaluationEnabledKey = (dersKodu) =>
 
 const DEFAULT_LIMIT = 3;
 
+const purgeCourseData = async (dersKodu, transaction) => {
+  const normalizedCourseCode = String(dersKodu || '').trim();
+  if (!normalizedCourseCode) return;
+
+  const submissions = await Submission.findAll({
+    where: { ders_kodu: normalizedCourseCode },
+    attributes: ['id'],
+    transaction,
+  });
+  const criteria = await Criterion.findAll({
+    where: { ders_kodu: normalizedCourseCode },
+    attributes: ['id'],
+    transaction,
+  });
+
+  const submissionIds = submissions.map(s => s.id);
+  const criterionIds = criteria.map(c => c.id);
+
+  if (submissionIds.length || criterionIds.length) {
+    await Grade.destroy({
+      where: {
+        [Op.or]: [
+          ...(submissionIds.length ? [{ submissionId: { [Op.in]: submissionIds } }] : []),
+          ...(criterionIds.length ? [{ criterionId: { [Op.in]: criterionIds } }] : []),
+        ],
+      },
+      transaction,
+    });
+  }
+
+  if (submissionIds.length) {
+    await Submission.destroy({
+      where: { id: { [Op.in]: submissionIds } },
+      transaction,
+    });
+  }
+
+  if (criterionIds.length) {
+    await Criterion.destroy({
+      where: { id: { [Op.in]: criterionIds } },
+      transaction,
+    });
+  }
+
+  const allowedStudents = await AllowedStudent.findAll({ transaction });
+  for (const row of allowedStudents) {
+    const updatedCourses = parseDersler(row.dersler).filter(ders => ders !== normalizedCourseCode);
+    const nextDersler = updatedCourses.join(',');
+
+    if (row.dersler === nextDersler) continue;
+
+    if (nextDersler) {
+      await row.update({ dersler: nextDersler }, { transaction });
+    } else {
+      await row.destroy({ transaction });
+      await User.destroy({
+        where: {
+          ogrenci_no: row.ogrenci_no,
+          rol: 'ogrenci',
+        },
+        transaction,
+      });
+    }
+  }
+};
+
 const getEvaluationLimit = async (dersKodu) => {
   const key = getVideoLimitKey(dersKodu);
   const rows = await Settings.findAll({
@@ -107,6 +173,60 @@ const normalizeAllowedStudentTable = async () => {
       });
     }
   }
+};
+
+const cleanupOrphanedCourseData = async () => {
+  await sequelize.transaction(async (transaction) => {
+    const activeCourses = await Course.findAll({
+      attributes: ['ders_kodu'],
+      transaction,
+    });
+    const activeCourseCodes = new Set(
+      activeCourses
+        .map(c => String(c.ders_kodu || '').trim())
+        .filter(Boolean)
+    );
+
+    const knownCodes = new Set();
+    const [submissionCodes, criterionCodes, allowedRows] = await Promise.all([
+      Submission.findAll({
+        attributes: ['ders_kodu'],
+        group: ['ders_kodu'],
+        transaction,
+      }),
+      Criterion.findAll({
+        attributes: ['ders_kodu'],
+        group: ['ders_kodu'],
+        transaction,
+      }),
+      AllowedStudent.findAll({
+        attributes: ['dersler'],
+        transaction,
+      }),
+    ]);
+
+    for (const row of submissionCodes) {
+      const code = String(row.ders_kodu || '').trim();
+      if (code) knownCodes.add(code);
+    }
+
+    for (const row of criterionCodes) {
+      const code = String(row.ders_kodu || '').trim();
+      if (code) knownCodes.add(code);
+    }
+
+    for (const row of allowedRows) {
+      for (const code of parseDersler(row.dersler)) {
+        knownCodes.add(code);
+      }
+    }
+
+    for (const courseCode of knownCodes) {
+      if (!activeCourseCodes.has(courseCode)) {
+        await purgeCourseData(courseCode, transaction);
+      }
+    }
+  });
 };
 
 const sumScore = (grades) => {
@@ -425,66 +545,7 @@ app.delete('/api/courses/:dersKodu', adminKontrol, async (req, res) => {
   if (!hasCourseAccess(req.authorizedCourses, dersKodu)) return res.status(403).json({ error: 'Bu ders için yetkiniz yok.' });
   try {
     await sequelize.transaction(async (transaction) => {
-      const submissions = await Submission.findAll({
-        where: { ders_kodu: dersKodu },
-        attributes: ['id'],
-        transaction,
-      });
-      const criteria = await Criterion.findAll({
-        where: { ders_kodu: dersKodu },
-        attributes: ['id'],
-        transaction,
-      });
-
-      const submissionIds = submissions.map(s => s.id);
-      const criterionIds = criteria.map(c => c.id);
-
-      if (submissionIds.length || criterionIds.length) {
-        await Grade.destroy({
-          where: {
-            [Op.or]: [
-              ...(submissionIds.length ? [{ submissionId: { [Op.in]: submissionIds } }] : []),
-              ...(criterionIds.length ? [{ criterionId: { [Op.in]: criterionIds } }] : []),
-            ],
-          },
-          transaction,
-        });
-      }
-
-      if (submissionIds.length) {
-        await Submission.destroy({
-          where: { id: { [Op.in]: submissionIds } },
-          transaction,
-        });
-      }
-
-      if (criterionIds.length) {
-        await Criterion.destroy({
-          where: { id: { [Op.in]: criterionIds } },
-          transaction,
-        });
-      }
-
-      // allowed_students satırından bu ders kodunu çıkarıyoruz; liste boş kalırsa kaydı siliyoruz.
-      const allowedStudents = await AllowedStudent.findAll({ transaction });
-      for (const row of allowedStudents) {
-        const updatedCourses = parseDersler(row.dersler).filter(ders => ders !== dersKodu);
-        const nextDersler = updatedCourses.join(',');
-        if (row.dersler !== nextDersler) {
-          await row.update({ dersler: nextDersler }, { transaction });
-        }
-        if (!nextDersler) {
-          await row.destroy({ transaction });
-          await User.destroy({
-            where: {
-              ogrenci_no: row.ogrenci_no,
-              rol: 'ogrenci',
-            },
-            transaction,
-          });
-        }
-      }
-
+      await purgeCourseData(dersKodu, transaction);
       await Course.destroy({
         where: { ders_kodu: dersKodu },
         transaction,
@@ -1046,6 +1107,7 @@ const startServer = async () => {
     await sequelize.sync(shouldAlterSchema ? { alter: true } : {});
     await migrateLegacyAllowedStudentTable();
     await normalizeAllowedStudentTable();
+    await cleanupOrphanedCourseData();
     app.listen(PORT, () => console.log(`📡 Sunucu çalışıyor: ${PORT}`));
   } catch (err) {
     console.error('Sunucu başlatılamadı:', err);
