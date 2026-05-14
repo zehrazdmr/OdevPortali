@@ -15,17 +15,22 @@ export default function EvaluatePage() {
 
   const navigate = useNavigate();
   const user = JSON.parse(localStorage.getItem('user') || 'null');
+  const userId = user?.id ?? null;
   const selectedCourse = localStorage.getItem('selectedCourse') || '';
 
   useEffect(() => {
-    if (!user) {
+    if (!userId) {
       navigate('/login');
       return;
     }
 
+    let cancelled = false;
+
     const checkAndLoad = async () => {
       try {
-        const statusRes = await api.evaluations.checkSubmissionStatus(user.id, selectedCourse);
+        const statusRes = await api.evaluations.checkSubmissionStatus(userId, selectedCourse);
+        if (cancelled) return;
+
         const uploaded = statusRes.data?.hasUploaded;
         setHasUploaded(uploaded);
         if (!uploaded) {
@@ -33,7 +38,9 @@ export default function EvaluatePage() {
           return;
         }
 
-        const canEvaluateRes = await api.evaluations.canEvaluate(user.id, selectedCourse);
+        const canEvaluateRes = await api.evaluations.canEvaluate(userId, selectedCourse);
+        if (cancelled) return;
+
         const allowed = canEvaluateRes.data?.canEvaluate;
         setCanEvaluate(allowed);
         setPermissionMessage(canEvaluateRes.data?.message || '');
@@ -42,7 +49,9 @@ export default function EvaluatePage() {
           return;
         }
 
-        const assignRes = await api.evaluations.assignVideo(user.id, selectedCourse);
+        const assignRes = await api.evaluations.assignVideo(userId, selectedCourse);
+        if (cancelled) return;
+
         if (!assignRes.ok) {
           alert(assignRes.error || 'Puanlanacak video bulunamadı.');
           navigate('/dashboard');
@@ -51,16 +60,19 @@ export default function EvaluatePage() {
         setSubmission(assignRes.data);
 
         const criteriaRes = await api.criteria.listByCourse(selectedCourse);
-        if (criteriaRes.ok) setCriteria(criteriaRes.data);
+        if (!cancelled && criteriaRes.ok) setCriteria(criteriaRes.data);
       } catch (err) {
         console.error(err);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     checkAndLoad();
-  }, [navigate, selectedCourse, user]);
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, selectedCourse, userId]);
 
   const submitEvaluation = async () => {
     if (Object.keys(scores).length < criteria.length) {
@@ -72,7 +84,7 @@ export default function EvaluatePage() {
     try {
       const res = await api.grades.create({
         submissionId: submission.id,
-        userId: user.id,
+        userId,
         puanlananOgrenciId: submission.userId || submission.UserId,
         scores: Object.entries(scores).map(([id, val]) => ({ criterionId: parseInt(id), puan: parseInt(val) })),
       });

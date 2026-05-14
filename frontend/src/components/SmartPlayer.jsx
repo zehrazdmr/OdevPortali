@@ -22,8 +22,32 @@ export default function SmartPlayer({ videoUrl }) {
     <div className="rounded-xl overflow-hidden aspect-video bg-black">
       <YouTube
         videoId={videoId}
-        opts={{ width: '100%', height: '100%', playerVars: { controls: 1, disablekb: 0, rel: 0 } }}
+        opts={{
+          width: '100%',
+          height: '100%',
+          playerVars: {
+            controls: 1,
+            disablekb: 0,
+            fs: 1,
+            rel: 0,
+            modestbranding: 1,
+            playsinline: 1,
+          },
+        }}
         className="w-full h-full"
+        title="Proje videosu"
+        onReady={(event) => {
+          if (typeof event.target.getIframe === 'function') {
+            const iframe = event.target.getIframe();
+            if (iframe && typeof iframe.setAttribute === 'function') {
+              iframe.setAttribute('allowfullscreen', '');
+              iframe.setAttribute(
+                'allow',
+                'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen'
+              );
+            }
+          }
+        }}
       />
     </div>
   );
