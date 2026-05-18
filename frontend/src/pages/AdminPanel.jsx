@@ -2,7 +2,6 @@
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api } from '../services/api';
-import QuickLinkCard from '../components/QuickLinkCard';
 
 const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
 const fmtScore = (v) => {
@@ -380,6 +379,12 @@ export default function AdminPanel() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-primary-200 text-sm hidden md:block">{user?.ad_soyad}</span>
+            <a
+              href="https://selakademi.tr/quiz"
+              className="text-sm text-primary-200 hover:text-white transition-colors"
+            >
+              VibeLearn'e Git
+            </a>
             <button onClick={() => { localStorage.clear(); navigate('/login'); }}
               className="text-sm text-primary-200 hover:text-white transition-colors">Çıkış</button>
           </div>
@@ -387,17 +392,6 @@ export default function AdminPanel() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-
-        <div className="flex justify-end">
-          <div className="w-full max-w-sm">
-            <QuickLinkCard
-              href="https://selakademi.tr/quiz"
-              title="VibeLearn'e Git"
-              description="Quiz ve Pano Modülleri"
-              icon="🧩"
-            />
-          </div>
-        </div>
 
         {/* Üst kart satırı */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
