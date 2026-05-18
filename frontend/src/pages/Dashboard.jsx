@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import QuickLinkCard from '../components/QuickLinkCard';
 
 const fmtCount = (value) => (value != null ? String(Number(value)) : '—');
 const fmtScore = (value) => {
@@ -188,6 +189,13 @@ export default function Dashboard() {
             <h3 className="font-semibold text-gray-900 group-hover:text-primary-700">Arkadaşını Değerlendir</h3>
             <p className="text-sm text-gray-500 mt-1">Rastgele bir projeyi izle ve puanla.</p>
           </button>
+
+          <QuickLinkCard
+            href="https://selakademi.tr/quiz"
+            title="VibeLearn'e Git"
+            description="Quiz ve Pano Modülleri"
+            icon="🧩"
+          />
         </div>
       </main>
 

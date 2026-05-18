@@ -1,0 +1,8 @@
+Options -MultiViews
+RewriteEngine On
+RewriteBase /
+
+# Refresh sonrası SPA route'larının 404 vermemesi için tüm gerçek dosya/klasör olmayan istekleri index'e gönder.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.html [L]

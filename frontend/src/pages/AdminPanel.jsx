@@ -2,6 +2,7 @@
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { api } from '../services/api';
+import QuickLinkCard from '../components/QuickLinkCard';
 
 const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
 const fmtScore = (v) => {
@@ -64,6 +65,12 @@ export default function AdminPanel() {
         ? { key, direction: curr.direction === 'asc' ? 'desc' : 'asc' }
         : { key, direction: 'desc' }
     ));
+  };
+
+  const getStatusSortValue = (student) => {
+    if (!student?.isRegistered) return 0;
+    if (!student?.Submission) return 1;
+    return 2;
   };
 
   const fetchData = useCallback(async () => {
@@ -335,8 +342,12 @@ export default function AdminPanel() {
     };
 
     return [...filteredStudents].sort((a, b) => {
-      const av = getSortValue(a[sortConfig.key]);
-      const bv = getSortValue(b[sortConfig.key]);
+      const av = sortConfig.key === 'status'
+        ? getStatusSortValue(a)
+        : getSortValue(a[sortConfig.key]);
+      const bv = sortConfig.key === 'status'
+        ? getStatusSortValue(b)
+        : getSortValue(b[sortConfig.key]);
       const aMissing = av == null;
       const bMissing = bv == null;
 
@@ -376,6 +387,17 @@ export default function AdminPanel() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+
+        <div className="flex justify-end">
+          <div className="w-full max-w-sm">
+            <QuickLinkCard
+              href="https://selakademi.tr/quiz"
+              title="VibeLearn'e Git"
+              description="Quiz ve Pano Modülleri"
+              icon="🧩"
+            />
+          </div>
+        </div>
 
         {/* Üst kart satırı */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -496,7 +518,11 @@ export default function AdminPanel() {
                   <th className="px-3 py-3 text-center w-10">#</th>
                   <th className="px-4 py-3 text-left">Öğrenci No</th>
                   <th className="px-4 py-3 text-left">Ad Soyad</th>
-                  <th className="px-4 py-3 text-left">Durum</th>
+                  <th className="px-4 py-3 text-left">
+                    <button type="button" onClick={() => handleSort('status')} className="inline-flex w-full items-center justify-start gap-1">
+                      <span>Durum</span><span className="text-[10px]">{sortConfig.key === 'status' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</span>
+                    </button>
+                  </th>
                   <th className="px-4 py-3 text-right">
                     <button type="button" onClick={() => handleSort('alinan_ortalama')} className="inline-flex w-full items-center justify-end gap-1">
                       <span>Aldığı Ortalama</span><span className="text-[10px]">{sortConfig.key === 'alinan_ortalama' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</span>
