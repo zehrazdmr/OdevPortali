@@ -20,6 +20,7 @@ const fmtTableScore = (v) => fmtScore(v);
 export default function AdminPanel() {
   const navigate = useNavigate();
   const user = useMemo(() => JSON.parse(localStorage.getItem('user') || 'null'), []);
+  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || 'http://localhost:5173';
 
   const [selectedCourse, setSelectedCourse] = useState(localStorage.getItem('selectedCourse') || '');
   const [courses, setCourses] = useState([]);
@@ -318,6 +319,19 @@ export default function AdminPanel() {
     XLSX.writeFile(wb, `${reportModal.ogrenci_no}_Rapor.xlsx`);
   };
 
+  const handleOpenVibeLearn = async () => {
+    try {
+      const r = await api.sso.createVibeLearnToken(authHeaders);
+      if (!r.ok || !r.data?.token) {
+        alert(r.error || 'VibeLearn bağlantısı oluşturulamadı.');
+        return;
+      }
+      window.location.href = `${vibeLearnBaseUrl.replace(/\/$/, '')}/sso?token=${encodeURIComponent(r.data.token)}`;
+    } catch {
+      alert('VibeLearn bağlantısı sırasında hata oluştu.');
+    }
+  };
+
   const getEmbedUrl = (url) => {
     if (!url) return null;
     const match = url.match(/(?:youtu\.be\/|watch\?v=|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);
@@ -379,12 +393,13 @@ export default function AdminPanel() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-primary-200 text-sm hidden md:block">{user?.ad_soyad}</span>
-            <a
-              href="https://selakademi.tr/quiz"
+            <button
+              type="button"
+              onClick={handleOpenVibeLearn}
               className="text-sm text-primary-200 hover:text-white transition-colors"
             >
               VibeLearn'e Git
-            </a>
+            </button>
             <button onClick={() => { localStorage.clear(); navigate('/login'); }}
               className="text-sm text-primary-200 hover:text-white transition-colors">Çıkış</button>
           </div>

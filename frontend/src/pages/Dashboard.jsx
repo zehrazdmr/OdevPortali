@@ -18,6 +18,8 @@ export default function Dashboard() {
   const user = JSON.parse(localStorage.getItem('user') || 'null');
   const userId = user?.id;
   const selectedCourse = localStorage.getItem('selectedCourse') || '';
+  const authHeaders = user?.id ? { 'x-user-id': String(user.id) } : {};
+  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || 'http://localhost:5173';
   const [isModalOpen, setModalOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
   const [aciklama, setAciklama] = useState('');
@@ -100,6 +102,19 @@ export default function Dashboard() {
   const handleLogout = () => {
     localStorage.clear();
     navigate('/login');
+  };
+
+  const handleOpenVibeLearn = async () => {
+    try {
+      const res = await api.sso.createVibeLearnToken(authHeaders);
+      if (!res.ok || !res.data?.token) {
+        alert(res.error || 'VibeLearn bağlantısı oluşturulamadı.');
+        return;
+      }
+      window.location.href = `${vibeLearnBaseUrl.replace(/\/$/, '')}/sso?token=${encodeURIComponent(res.data.token)}`;
+    } catch {
+      alert('VibeLearn bağlantısı sırasında hata oluştu.');
+    }
   };
 
   if (!user) return null;
@@ -191,7 +206,7 @@ export default function Dashboard() {
           </button>
 
           <QuickLinkCard
-            href="https://selakademi.tr/quiz"
+            onClick={handleOpenVibeLearn}
             title="VibeLearn'e Git"
             description="Quiz ve Pano Modülleri"
             icon="🧩"

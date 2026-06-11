@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const { sequelize, connectDB } = require('./db');
 const {
@@ -37,6 +38,28 @@ const parseDersler = (val) => {
 const hasCourseAccess = (authorizedCourses, courseCode) => {
   if (!courseCode) return true;
   return authorizedCourses.includes(String(courseCode).trim());
+};
+
+const VIBE_LEARN_SSO_SECRET = process.env.VIBE_LEARN_SSO_SECRET || process.env.JWT_SECRET || 'vibe-learn-sso-secret';
+
+const mapVibeLearnRole = (user) => (user?.rol === 'hoca' ? 'teacher' : 'student');
+
+const createVibeLearnHandoffToken = (user) => {
+  const payload = {
+    source: 'odevportali',
+    externalId: user.id,
+    ogrenci_no: user.ogrenci_no,
+    ad_soyad: user.ad_soyad,
+    role: mapVibeLearnRole(user),
+    is_admin: !!user.is_admin,
+  };
+
+  return jwt.sign(payload, VIBE_LEARN_SSO_SECRET, {
+    expiresIn: '60s',
+    issuer: 'odevportali',
+    audience: 'vibe-learn',
+    jwtid: `${user.id}-${Date.now()}`,
+  });
 };
 
 const normNo = (v) => String(v || '').trim();
@@ -486,6 +509,35 @@ app.post('/api/auth/login', async (req, res) => {
   console.error("LOGIN HATA:", err);
   res.status(500).json({ error: err.message });
 }
+});
+
+app.post('/api/auth/vibelearn-token', async (req, res) => {
+  try {
+    const userId = parseInt(req.headers['x-user-id'], 10);
+    if (!Number.isInteger(userId)) {
+      return res.status(401).json({ error: 'Yetkilendirme bilgisi eksik.' });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(401).json({ error: 'Kullanıcı bulunamadı.' });
+    }
+
+    const token = createVibeLearnHandoffToken(user);
+    res.json({
+      token,
+      expiresIn: 60,
+      user: {
+        id: user.id,
+        ad_soyad: user.ad_soyad,
+        rol: user.rol,
+        is_admin: !!user.is_admin,
+      },
+    });
+  } catch (err) {
+    console.error('VibeLearn token hatasi:', err);
+    res.status(500).json({ error: 'VibeLearn giriş köprüsü oluşturulamadı.' });
+  }
 });
 
 app.post('/api/admin/upload-students', adminKontrol, async (req, res) => {

@@ -89,6 +89,9 @@ export const api = {
   grades: {
     create: (body, headers) => request('/grades', { method: 'POST', body, headers })
   },
+  sso: {
+    createVibeLearnToken: (headers) => request('/auth/vibelearn-token', { method: 'POST', headers }),
+  },
   admin: {
     uploadStudents: (body, headers) => request('/admin/upload-students', { method: 'POST', body, headers }),
     listInstructors: (headers) => request('/admin/instructors', { headers }),
