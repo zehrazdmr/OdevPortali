@@ -19,7 +19,12 @@ export default function Dashboard() {
   const userId = user?.id;
   const selectedCourse = localStorage.getItem('selectedCourse') || '';
   const authHeaders = user?.id ? { 'x-user-id': String(user.id) } : {};
-  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || window.location.origin;
+  const isLocalHost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname);
+  const vibeLearnEnvUrl = process.env.REACT_APP_VIBE_LEARN_URL?.trim();
+  const vibeLearnBaseUrl =
+    vibeLearnEnvUrl && (!/localhost|127\.0\.0\.1/.test(vibeLearnEnvUrl) || isLocalHost)
+      ? vibeLearnEnvUrl
+      : (isLocalHost ? 'http://localhost:5173' : window.location.origin);
   const [isModalOpen, setModalOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
   const [aciklama, setAciklama] = useState('');
