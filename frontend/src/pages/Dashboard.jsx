@@ -19,7 +19,7 @@ export default function Dashboard() {
   const userId = user?.id;
   const selectedCourse = localStorage.getItem('selectedCourse') || '';
   const authHeaders = user?.id ? { 'x-user-id': String(user.id) } : {};
-  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || 'http://localhost:5173';
+  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || window.location.origin;
   const [isModalOpen, setModalOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
   const [aciklama, setAciklama] = useState('');

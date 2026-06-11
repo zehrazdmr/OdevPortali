@@ -20,7 +20,7 @@ const fmtTableScore = (v) => fmtScore(v);
 export default function AdminPanel() {
   const navigate = useNavigate();
   const user = useMemo(() => JSON.parse(localStorage.getItem('user') || 'null'), []);
-  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || 'http://localhost:5173';
+  const vibeLearnBaseUrl = process.env.REACT_APP_VIBE_LEARN_URL || window.location.origin;
 
   const [selectedCourse, setSelectedCourse] = useState(localStorage.getItem('selectedCourse') || '');
   const [courses, setCourses] = useState([]);
