@@ -5,6 +5,10 @@ const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL?.trim() ||
   (isLocalHost ? 'http://localhost:5002/api' : '/api');
 
+export const VIBE_LEARN_BASE_URL =
+  process.env.REACT_APP_VIBE_LEARN_URL?.trim() ||
+  (isLocalHost ? 'http://localhost:5173' : `${window.location.origin}/quiz`);
+
 const buildUrl = (endpoint, query = {}) => {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = new URL(`${API_BASE_URL}${normalizedEndpoint}`);

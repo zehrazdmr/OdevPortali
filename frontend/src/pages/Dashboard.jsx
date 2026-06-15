@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../services/api';
+import { api, VIBE_LEARN_BASE_URL } from '../services/api';
 import QuickLinkCard from '../components/QuickLinkCard';
 
 const fmtCount = (value) => (value != null ? String(Number(value)) : '—');
@@ -19,10 +19,6 @@ export default function Dashboard() {
   const userId = user?.id;
   const selectedCourse = localStorage.getItem('selectedCourse') || '';
   const authHeaders = user?.id ? { 'x-user-id': String(user.id) } : {};
-  const isLocalHost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname);
-  const vibeLearnBaseUrl = isLocalHost
-    ? 'http://localhost:5173'
-    : `${window.location.origin}/quiz`;
   const [isModalOpen, setModalOpen] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
   const [aciklama, setAciklama] = useState('');
@@ -114,7 +110,7 @@ export default function Dashboard() {
         alert(res.error || 'VibeLearn bağlantısı oluşturulamadı.');
         return;
       }
-      window.location.href = `${vibeLearnBaseUrl.replace(/\/$/, '')}/sso?token=${encodeURIComponent(res.data.token)}`;
+      window.location.href = `${VIBE_LEARN_BASE_URL.replace(/\/$/, '')}/sso?token=${encodeURIComponent(res.data.token)}`;
     } catch {
       alert('VibeLearn bağlantısı sırasında hata oluştu.');
     }

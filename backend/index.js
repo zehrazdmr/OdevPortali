@@ -540,6 +540,39 @@ app.post('/api/auth/vibelearn-token', async (req, res) => {
   }
 });
 
+app.post('/api/auth/sso', async (req, res) => {
+  try {
+    const token = String(req.body?.token || req.body?.ssoToken || req.query?.token || '').trim();
+    if (!token) {
+      return res.status(400).json({ error: 'SSO token eksik.' });
+    }
+
+    const payload = jwt.verify(token, VIBE_LEARN_SSO_SECRET, {
+      issuer: 'odevportali',
+      audience: 'vibe-learn',
+    });
+
+    res.json({
+      message: 'SSO token doğrulandı.',
+      user: {
+        id: payload.externalId,
+        ogrenci_no: payload.ogrenci_no,
+        ad_soyad: payload.ad_soyad,
+        rol: payload.role === 'teacher' ? 'hoca' : 'ogrenci',
+        is_admin: !!payload.is_admin,
+      },
+      payload,
+    });
+  } catch (err) {
+    const statusCode = err?.name === 'TokenExpiredError' ? 401 : 400;
+    res.status(statusCode).json({
+      error: err?.name === 'TokenExpiredError'
+        ? 'SSO token süresi dolmuş.'
+        : 'SSO token doğrulanamadı.',
+    });
+  }
+});
+
 app.post('/api/admin/upload-students', adminKontrol, async (req, res) => {
   const { students, secilenDers } = req.body;
   if (!hasCourseAccess(req.authorizedCourses, secilenDers)) {

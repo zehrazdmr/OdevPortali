@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
-import { api } from '../services/api';
+import { api, VIBE_LEARN_BASE_URL } from '../services/api';
 
 const fmtCount = (v) => (v != null ? String(Number(v)) : '—');
 const fmtScore = (v) => {
@@ -20,10 +20,6 @@ const fmtTableScore = (v) => fmtScore(v);
 export default function AdminPanel() {
   const navigate = useNavigate();
   const user = useMemo(() => JSON.parse(localStorage.getItem('user') || 'null'), []);
-  const isLocalHost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname);
-  const vibeLearnBaseUrl = isLocalHost
-    ? 'http://localhost:5173'
-    : `${window.location.origin}/quiz`;
 
   const [selectedCourse, setSelectedCourse] = useState(localStorage.getItem('selectedCourse') || '');
   const [courses, setCourses] = useState([]);
@@ -329,7 +325,7 @@ export default function AdminPanel() {
         alert(r.error || 'VibeLearn bağlantısı oluşturulamadı.');
         return;
       }
-      window.location.href = `${vibeLearnBaseUrl.replace(/\/$/, '')}/sso?token=${encodeURIComponent(r.data.token)}`;
+      window.location.href = `${VIBE_LEARN_BASE_URL.replace(/\/$/, '')}/sso?token=${encodeURIComponent(r.data.token)}`;
     } catch {
       alert('VibeLearn bağlantısı sırasında hata oluştu.');
     }
