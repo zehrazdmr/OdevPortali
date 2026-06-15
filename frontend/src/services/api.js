@@ -1,4 +1,9 @@
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://selakademi.tr/api';
+const isLocalHost =
+  typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname);
+
+const API_BASE_URL =
+  process.env.REACT_APP_API_BASE_URL?.trim() ||
+  (isLocalHost ? 'http://localhost:5002/api' : '/api');
 
 const buildUrl = (endpoint, query = {}) => {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
